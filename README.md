@@ -1,5 +1,9 @@
 # 25仔（25zai）
 
+[![ci](https://github.com/refout/25zai-clipboard/actions/workflows/ci.yml/badge.svg)](https://github.com/refout/25zai-clipboard/actions/workflows/ci.yml)
+[![release](https://github.com/refout/25zai-clipboard/actions/workflows/release.yml/badge.svg)](https://github.com/refout/25zai-clipboard/actions/workflows/release.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > Featherweight clipboard memory for every desktop.
 
 一个用 Rust + egui 写的轻量剪贴板历史工具：常驻托盘，`Alt+V` 唤起，点击即粘贴。
@@ -22,7 +26,12 @@
 
 平台：**Windows 11 已实测**；macOS / Linux 代码路径存在但未验证。
 
-## 快速开始
+## 下载
+
+到 [Releases](https://github.com/refout/25zai-clipboard/releases) 下 `25zai-v*-windows-x64.zip`，
+解压后直接运行 `25zai.exe`，免安装、无运行时依赖。压缩包里附 `SHA256SUMS.txt` 校验。
+
+## 从源码构建
 
 需要 Rust 1.89+（edition 2021）。
 
@@ -115,6 +124,18 @@ cargo clippy --workspace --all-targets
 | `25zai --search <关键词>` | 走存储层搜索，验证正文命中 |
 | `25zai --set-theme <light\|dark\|system>` | 切换主题 |
 | `25zai --set-tray-icon <路径>` | 设置托盘图标（`-` 恢复内置） |
+
+## 发布
+
+打 tag 即触发 [release.yml](.github/workflows/release.yml)：先跑全量测试，再构建
+`windows-latest` 版本，打出带校验和的 zip 并挂到 Release 上。
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+也可以在 Actions 页面手动触发：只产出 artifact，不会建 Release，用来验证打包脚本。
 
 ## 已知限制
 

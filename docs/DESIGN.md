@@ -828,6 +828,9 @@ GPUI 0.2.2（crates.io，非 git 依赖），release 构建，`crates/erwuzai-gp
 **2026-10-19 追加**：列表行改成淡底色卡片 + 6px 行距（对齐 Win+V 的信息密度）；
 图片行加 40×40 缩略图；点条目直接粘贴，钉住窗口时借焦点再还回去；
 托盘右键菜单跟随深色模式；毛玻璃整块删除。测试 43 项全绿。
+同日开源到 GitHub（`refout/25zai-clipboard`）并加了 Actions：`ci` 跑
+`clippy -D warnings` + 全量测试，`release` 由 tag 触发、先测后打包，
+产出带 SHA256 的 zip。
 
 ---
 

@@ -1,0 +1,59 @@
+name: release
+
+# 打 tag 触发：git tag v0.1.0 && git push origin v0.1.0
+# workflow_dispatch 只出 artifact，不建 Release，用来验证打包脚本。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 打包前先跑测试：发出去的包必须是通过测试的那一份。
+      - name: test
+        run: cargo test --workspace
+
+      - name: build
+        run: cargo build --release --locked -p erwuzai-ui
+
+      - name: package
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "dev-${{ github.sha }}".Substring(0, 12) }
+          $name = "25zai-$tag-windows-x64"
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item "target/release/25zai.exe" "dist/$name/"
+          Copy-Item "README.md", "LICENSE" "dist/$name/"
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name.zip" | Set-Content -Encoding ascii "dist/SHA256SUMS.txt"
+          "PKG_NAME=$name" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG_NAME }}
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: publish
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          draft: false
