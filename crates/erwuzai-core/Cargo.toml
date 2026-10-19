@@ -1,0 +1,9 @@
+[package]
+name = "erwuzai-core"
+version = "0.1.0"
+description = "25zai core: data directory resolution and single-instance lock"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]

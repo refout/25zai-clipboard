@@ -1,0 +1,15 @@
+[package]
+name = "erwuzai-store"
+version = "0.1.0"
+description = "25zai storage layer: redb-backed clipboard history with usage-order semantics"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+redb.workspace = true
+blake3.workspace = true
+serde.workspace = true
+postcard.workspace = true
+serde_json = "1"
+thiserror.workspace = true

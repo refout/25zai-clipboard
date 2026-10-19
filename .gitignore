@@ -1,0 +1,16 @@
+# Rust
+/target
+
+# 调试产物
+*.log
+*.pdb
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 本地数据（便携模式会用 $env:25ZAI_DATA_DIR 指到别处）
+*.db
+blobs/

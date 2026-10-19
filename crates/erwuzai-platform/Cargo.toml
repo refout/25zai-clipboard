@@ -1,0 +1,28 @@
+[package]
+name = "erwuzai-platform"
+version = "0.1.0"
+description = "25zai platform boundary: clipboard, hotkey, source app, echo suppression"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+clipboard-rs = "0.3"
+global-hotkey = "0.9"
+tray-icon = "0.26"
+muda = "0.21"
+image = "0.25"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

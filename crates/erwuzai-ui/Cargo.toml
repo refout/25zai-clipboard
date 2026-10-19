@@ -1,0 +1,24 @@
+[package]
+name = "erwuzai-ui"
+version = "0.1.0"
+description = "25zai desktop shell (eframe/egui)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+erwuzai-core = { path = "../erwuzai-core" }
+erwuzai-platform = { path = "../erwuzai-platform" }
+erwuzai-store = { path = "../erwuzai-store" }
+# 只用 glow 后端：默认的 wgpu 在 Rust 1.99 下编译失败（wgpu-hal 报 10 个错误）。
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts"] }
+blake3.workspace = true
+rfd = "0.17"
+image = "0.25"
+# 只用布尔层（is_probably_secret），关掉 rules 可以少带 regex 依赖。
+secretshape = { version = "0.1", default-features = false }
+clipboard-rs = "0.3"
+
+[[bin]]
+name = "25zai"
+path = "src/main.rs"
