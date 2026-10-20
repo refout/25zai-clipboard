@@ -31,13 +31,33 @@ jobs:
         shell: pwsh
         run: |
           $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "dev-${{ github.sha }}".Substring(0, 12) }
+          # Inno 的 AppVersion 只接受数字点分，dev 构建统一报 0.0.0，版本信息靠文件名区分。
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" -replace '^v', '' } else { '0.0.0' }
           $name = "25zai-$tag-windows-x64"
+
+          # 绿色版：解压即用
           New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
           Copy-Item "target/release/25zai.exe" "dist/$name/"
           Copy-Item "README.md", "LICENSE" "dist/$name/"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
-          $hash = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $name.zip" | Set-Content -Encoding ascii "dist/SHA256SUMS.txt"
+
+          # 安装包：同一个 exe，多一层开始菜单 / 开机自启 / 卸载
+          New-Item -ItemType Directory -Force -Path "dist/stage" | Out-Null
+          Copy-Item "dist/$name/*" "dist/stage/"
+          choco install innosetup --no-progress -y | Out-Null
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "找不到 ISCC.exe" }
+          & $iscc "/DAppVersion=$version" "/DOutputBase=$name-setup" ".github/installer/25zai.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 失败（退出码 $LASTEXITCODE）" }
+
+          # 两个包一起算校验和
+          $sums = Get-ChildItem dist -File | Where-Object { $_.Extension -in '.zip', '.exe' } | ForEach-Object {
+            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name
+          }
+          $sums | Set-Content -Encoding ascii "dist/SHA256SUMS.txt"
           "PKG_NAME=$name" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
@@ -45,6 +65,7 @@ jobs:
           name: ${{ env.PKG_NAME }}
           path: |
             dist/*.zip
+            dist/*-setup.exe
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -54,6 +75,7 @@ jobs:
         with:
           files: |
             dist/*.zip
+            dist/*-setup.exe
             dist/SHA256SUMS.txt
           generate_release_notes: true
           draft: false

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use erwuzai_core::{request_show, InstanceError, Paths, SingleInstance};
+use erwuzai_core::{InstanceError, Paths, SingleInstance};
 use erwuzai_platform::{
     pump_messages, set_menu_dark_mode, EchoGuard, HotkeyBackend, HotkeySpec, SystemHotkey,
     SystemTray, TrayEvent,
@@ -56,8 +56,9 @@ pub fn run() -> Result<(), AnyError> {
     let _instance = match SingleInstance::acquire(&paths.lock()) {
         Ok(instance) => instance,
         Err(InstanceError::AlreadyRunning) => {
-            // 已经有守护进程了：把活交给它，自己退出。
-            request_show(&paths.port());
+            // 已经有守护进程了。这里**不**去唤起 UI：开机自启的快捷方式就是
+            // `--daemon`，重复拉起时弹窗等于每次登录都糊一脸。想唤起的走
+            // 启动器（不带参数），它自己会发 show。
             return Ok(());
         }
         Err(e) => return Err(e.into()),

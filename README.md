@@ -28,8 +28,18 @@
 
 ## 下载
 
-到 [Releases](https://github.com/refout/25zai-clipboard/releases) 下 `25zai-v*-windows-x64.zip`，
-解压后直接运行 `25zai.exe`，免安装、无运行时依赖。压缩包里附 `SHA256SUMS.txt` 校验。
+到 [Releases](https://github.com/refout/25zai-clipboard/releases) 选一个：
+
+| 包 | 适合 | 说明 |
+|---|---|---|
+| `25zai-v*-windows-x64-setup.exe` | 日常使用 | 安装包。用户级安装（不弹 UAC），带开始菜单、可选开机自启、可卸载 |
+| `25zai-v*-windows-x64.zip` | 便携 / 绿色版 | 解压即用，不写注册表、不留卸载项 |
+
+两个包装的是同一个 exe，功能完全一样。都附 `SHA256SUMS.txt` 校验。
+安装包默认勾选「开机自动启动」，用的是 `25zai.exe --daemon`——只起后台守护进程，
+不会每次登录都弹窗；想取消就在安装向导里去掉，或删掉启动目录里的快捷方式。
+
+exe 目前**没有代码签名**，首次运行 SmartScreen 会拦一下，点「更多信息 → 仍要运行」即可。
 
 ## 从源码构建
 
@@ -138,7 +148,8 @@ cargo clippy --workspace --all-targets
 ## 发布
 
 打 tag 即触发 [release.yml](.github/workflows/release.yml)：先跑全量测试，再构建
-`windows-latest` 版本，打出带校验和的 zip 并挂到 Release 上。
+`windows-latest` 版本，打出绿色版 zip 和 Inno Setup 安装包（脚本在
+`.github/installer/25zai.iss`），连同 `SHA256SUMS.txt` 一起挂到 Release 上。
 
 ```bash
 git tag v0.1.0
