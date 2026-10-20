@@ -38,6 +38,8 @@ SourceDir=..\..\dist\stage
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; 安装向导自己的图标 + 控制面板里的图标（都取自 exe 里嵌的那一份）
+SetupIconFile={#SourcePath}..\..\assets\icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible

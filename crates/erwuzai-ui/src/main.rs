@@ -72,6 +72,13 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
+    // 开发用：25zai --make-icons <源图> 从一张原图生成全部图标资产。
+    // 生成的是仓库里的固定文件（见 make_icons），不做参数化。
+    if let Some(src) = arg_value("--make-icons") {
+        make_icons(&src)?;
+        return Ok(());
+    }
+
     // 开发用：25zai --pack-icon <源图> <目标 png> 把任意图片压成内嵌托盘图标。
     // 不碰数据库，所以放在抢实例锁之前。
     if let Some((src, dst)) = arg_pair("--pack-icon") {
@@ -289,15 +296,19 @@ fn run_ui() -> Result<(), AnyError> {
         .unwrap_or_default();
     println!("loaded {} entries via daemon", page.items.len());
 
+    // 窗口图标：任务栏切换器、Alt+Tab 里显示的就是它。
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_inner_size([480.0, 420.0])
+        .with_decorations(false)
+        .with_visible(false)
+        .with_always_on_top()
+        .with_taskbar(false);
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
+        viewport = viewport.with_icon(icon);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([480.0, 420.0])
-            .with_decorations(false)
-            // 先不显示：首帧要先把窗口摆到光标处再露出来，
-            // 否则会先闪一下默认位置，再跳到目标位置。
-            .with_visible(false)
-            .with_always_on_top()
-            .with_taskbar(false),
+        viewport,
         ..Default::default()
     };
 
@@ -314,6 +325,84 @@ fn run_ui() -> Result<(), AnyError> {
     )
     .map_err(|e| e.to_string())?;
 
+    Ok(())
+}
+
+/// 从一张原图生成仓库里的全部图标：
+///
+/// - `assets/icon.ico`：exe 资源 + 安装包（16/24/32/48/64/128/256）
+/// - `assets/icon.png`：窗口图标与安装包展示（256）
+/// - `crates/erwuzai-platform/assets/icon.png`：托盘（64，托盘本身也就 16–32 px）
+/// - `crates/erwuzai-ui/assets/about.png`：设置页"关于"（128）
+///
+/// 原图可能是竖拍照片，先按短边居中裁成方图，再逐级 Lanczos 缩放——
+/// 直接从大图缩到 16 px 会糊。
+fn make_icons(src: &str) -> Result<(), AnyError> {
+    let img = image::open(src)?.to_rgba8();
+    let side = img.width().min(img.height());
+    let square = image::imageops::crop_imm(
+        &img,
+        (img.width() - side) / 2,
+        (img.height() - side) / 2,
+        side,
+        side,
+    )
+    .to_image();
+
+    let mut frames = Vec::new();
+    for size in [16u32, 24, 32, 48, 64, 128, 256] {
+        let scaled = image::imageops::resize(
+            &square,
+            size,
+            size,
+            image::imageops::FilterType::Lanczos3,
+        );
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(scaled).write_to(
+            &mut std::io::Cursor::new(&mut png),
+            image::ImageFormat::Png,
+        )?;
+        frames.push((size, png));
+    }
+
+    let mut ico = Vec::new();
+    ico.extend_from_slice(&0u16.to_le_bytes());
+    ico.extend_from_slice(&1u16.to_le_bytes());
+    ico.extend_from_slice(&(frames.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * frames.len() as u32;
+    for (size, png) in &frames {
+        // 256 在目录项里记 0
+        let dim = if *size >= 256 { 0 } else { *size as u8 };
+        ico.extend_from_slice(&[dim, dim, 0, 0]);
+        ico.extend_from_slice(&1u16.to_le_bytes());
+        ico.extend_from_slice(&32u16.to_le_bytes());
+        ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        ico.extend_from_slice(&offset.to_le_bytes());
+        offset += png.len() as u32;
+    }
+    for (_, png) in &frames {
+        ico.extend_from_slice(png);
+    }
+
+    let write = |path: &str, bytes: &[u8]| -> Result<(), AnyError> {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, bytes)?;
+        Ok(())
+    };
+
+    write("assets/icon.ico", &ico)?;
+    write("assets/icon.png", &frames[6].1)?;
+    write("crates/erwuzai-ui/assets/icon.png", &frames[6].1)?;
+    write("crates/erwuzai-platform/assets/icon.png", &frames[4].1)?;
+    write("crates/erwuzai-ui/assets/about.png", &frames[5].1)?;
+    println!(
+        "icons: ico {} bytes ({} sizes), tray {} bytes",
+        ico.len(),
+        frames.len(),
+        frames[4].1.len()
+    );
     Ok(())
 }
 
