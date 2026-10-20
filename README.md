@@ -90,10 +90,20 @@ Linux `~/.local/share/25zai/`。设置环境变量 `25ZAI_DATA_DIR` 可以整体
 ```
 crates/
   erwuzai-core      数据目录、单实例锁、第二实例转发
-  erwuzai-store     redb 七张表、去重、分页、清理、blob、服务线程
+  erwuzai-store     redb 七张表、去重、分页、清理、blob、服务线程、进程间协议
   erwuzai-platform  平台边界：剪贴板、全局热键、托盘、菜单主题、合成输入
-  erwuzai-ui        eframe/egui 弹窗：列表、搜索、设置、回放
+  erwuzai-ui        两个角色：守护进程（daemon.rs）与 eframe 弹窗（app.rs）
 ```
+
+运行时是**两个进程**，同一个 exe：
+
+- **守护进程**（无窗口，常驻）：实例锁、数据库、剪贴板监听、全局热键、托盘。
+  闲置只占 13 MB 左右。
+- **UI 进程**（有窗口，按需）：按 `Alt+V` 或点托盘才拉起，弹窗一藏就退出。
+  eframe 的窗口和 GL 上下文创建后收不回去，留着就是一百多 MB。
+
+两者走回环 TCP（127.0.0.1，一行一个 JSON）。所以任务管理器里看到两个
+`25zai.exe` 是正常的；退出请在托盘菜单或设置页点「退出」。
 
 两条硬规则：
 
@@ -108,11 +118,11 @@ crates/
 ## 开发
 
 ```bash
-cargo test --workspace     # 43 项测试
+cargo test --workspace     # 52 项测试
 cargo clippy --workspace --all-targets
 ```
 
-几个调试命令（都要在实例没运行时执行，或者本身就是给第二个实例用的）：
+几个调试命令。守护进程在跑时会自动走回环连接（库锁在它手里），不在就自己开库：
 
 | 命令 | 用途 |
 |---|---|
