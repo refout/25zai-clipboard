@@ -772,6 +772,8 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("退出 25仔").clicked() {
+                    // 守护进程才是"25仔"本身，光关窗口等于只是藏起来。
+                    self.handle.quit();
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });

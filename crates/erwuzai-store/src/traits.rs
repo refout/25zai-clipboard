@@ -262,6 +262,14 @@ impl StoreHandle {
         }
     }
 
+    /// 退出整个程序。本地模式下没有守护进程可退，返回 `false`。
+    pub fn quit(&self) -> bool {
+        match &self.remote {
+            Some(remote) => remote.quit(),
+            None => false,
+        }
+    }
+
     /// 改全局快捷键（守护进程持有热键）。
     pub fn set_hotkey(&self, spec: &str) -> std::result::Result<(), String> {
         match &self.remote {

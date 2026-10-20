@@ -57,6 +57,8 @@ pub enum WireRequest {
     SetMenuDark { dark: bool },
     /// 开发用：直接塞一条文本进历史（`25zai --seed`）。
     Seed { text: String },
+    /// 退出整个程序：守护进程一起走。UI 设置页的"退出"走这条。
+    Quit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,7 +220,8 @@ pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
         }
         WireRequest::ArmEcho { .. }
         | WireRequest::SetHotkey { .. }
-        | WireRequest::SetMenuDark { .. } => return None,
+        | WireRequest::SetMenuDark { .. }
+        | WireRequest::Quit => return None,
     };
     Some(pair)
 }
@@ -344,6 +347,14 @@ impl Remote {
         self.send(&Msg::Req {
             id: 0,
             body: WireRequest::ArmEcho { hash },
+        })
+    }
+
+    /// 请守护进程退出（它会顺带把自己的托盘图标收掉）。
+    pub fn quit(&self) -> bool {
+        self.send(&Msg::Req {
+            id: 0,
+            body: WireRequest::Quit,
         })
     }
 

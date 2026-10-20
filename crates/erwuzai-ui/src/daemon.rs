@@ -44,6 +44,8 @@ struct Ctx {
     hotkey_tx: std::sync::mpsc::Sender<HotkeyJob>,
     /// 当前 UI 会话的写端。同一时刻只允许一个 UI。
     ui: Arc<Mutex<Option<TcpStream>>>,
+    /// 连接线程（设置页的"退出"）和托盘都能叫停主循环。
+    quit: Arc<std::sync::atomic::AtomicBool>,
     exe: PathBuf,
 }
 
@@ -111,6 +113,7 @@ pub fn run() -> Result<(), AnyError> {
         guard,
         hotkey_tx,
         ui: Arc::new(Mutex::new(None)),
+        quit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         exe: std::env::current_exe()?,
     };
 
@@ -183,6 +186,11 @@ pub fn run() -> Result<(), AnyError> {
                 }
                 None => {}
             }
+        }
+
+        // 设置页点了"退出"：连接线程只是把旗子立起来，收尾留给主线程。
+        if ctx.quit.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(());
         }
 
         std::thread::sleep(Duration::from_millis(24));
@@ -309,6 +317,10 @@ impl Ctx {
             }
             WireRequest::SetMenuDark { dark } => {
                 set_menu_dark_mode(dark);
+                WireReply::ok_empty()
+            }
+            WireRequest::Quit => {
+                self.quit.store(true, std::sync::atomic::Ordering::Relaxed);
                 WireReply::ok_empty()
             }
             WireRequest::SetHotkey { spec } => {
