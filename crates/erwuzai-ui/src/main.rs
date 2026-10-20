@@ -22,7 +22,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erwuzai_core::{request_show, Paths, SingleInstance};
 use erwuzai_store::{
-    CapturedItem, ClipboardStore, Payload, RedbStore, Remote, StoreCommand, StoreHandle,
+    CapturedItem, Payload, RedbStore, Remote, Reply, StoreCommand, StoreError, StoreHandle,
+    StoreResult, StoreService,
 };
 
 type AnyError = Box<dyn Error + Send + Sync>;
@@ -130,6 +131,8 @@ fn run() -> Result<(), AnyError> {
     // 开发命令要独占数据库，不能因为"已有实例"就被转发掉。
     let dev_command = [
         "--dump",
+        "--search",
+        "--set-theme",
         "--set-tray-icon",
         "--seed",
         "--peek",
@@ -144,39 +147,47 @@ fn run() -> Result<(), AnyError> {
         return launch(&paths);
     }
 
-    // —— 以下只服务开发命令：自己开库，不经过守护进程 ——
-    let _instance = SingleInstance::acquire(&paths.lock()).ok();
-    let store = RedbStore::open(
-        paths.db(),
-        paths.blobs(),
-        std::sync::Arc::new(secrets::SecretshapeDetector),
-    )?;
+    // 开发命令要读库，但库锁在守护进程手里。先试 wire：它在就借它的手，
+    // 不在才自己开库——只有这条路需要抢实例锁。
+    let daemon = connect_daemon(&paths);
+    let handle = match &daemon {
+        Some(remote) => StoreHandle::remote(remote.clone()),
+        None => {
+            let _instance = SingleInstance::acquire(&paths.lock()).ok();
+            let store = RedbStore::open(
+                paths.db(),
+                paths.blobs(),
+                std::sync::Arc::new(secrets::SecretshapeDetector),
+            )?;
+            StoreService::spawn(Box::new(store))?.handle
+        }
+    };
 
     // 开发用：25zai --set-tray-icon <路径> 设置托盘图标（- 表示恢复内置）。
     if let Some(path) = arg_value("--set-tray-icon") {
-        let mut config = store.config()?;
+        let mut config = call(&handle, StoreCommand::get_config())?;
         config.tray_icon = if path == "-" { None } else { Some(path) };
-        store.update_config(config.clone())?;
+        call(&handle, StoreCommand::update_config(config.clone()))?;
         println!("tray_icon = {:?}", config.tray_icon);
         return Ok(());
     }
 
     // 开发用：25zai --set-theme <light|dark|system>
     if let Some(mode) = arg_value("--set-theme") {
-        let mut config = store.config()?;
+        let mut config = call(&handle, StoreCommand::get_config())?;
         config.theme = match mode.as_str() {
             "light" => erwuzai_store::ThemeMode::Light,
             "dark" => erwuzai_store::ThemeMode::Dark,
             _ => erwuzai_store::ThemeMode::System,
         };
-        store.update_config(config)?;
+        call(&handle, StoreCommand::update_config(config))?;
         println!("theme = {mode}");
         return Ok(());
     }
 
     // 开发用：25zai --search <关键词> 走和 UI 相同的存储层搜索，验证正文命中。
     if let Some(query) = arg_value("--search") {
-        let hits = store.search(&query, 20)?;
+        let hits = call(&handle, StoreCommand::search(query, 20))?;
         println!("命中 {} 条", hits.len());
         for entry in hits {
             println!(
@@ -190,7 +201,7 @@ fn run() -> Result<(), AnyError> {
 
     // 开发用：25zai --dump 打印当前历史，用于无 GUI 环境下验证采集链路。
     if std::env::args().any(|a| a == "--dump") {
-        let page = store.page(None, 50)?;
+        let page = call(&handle, StoreCommand::page(None, 50))?;
         println!("共 {} 条", page.total_visible);
         for entry in page.items {
             println!(
@@ -206,12 +217,21 @@ fn run() -> Result<(), AnyError> {
 
     // 开发用：25zai --seed 文本 直接写一条历史，方便在没有监听线程时验证 UI。
     if let Some(text) = seed_text() {
-        let outcome = store.capture(CapturedItem {
-            payload: Payload::Text(text),
-            source_app: Some("seed".into()),
-            captured_at: now_ms(),
-        })?;
-        println!("{outcome:?}");
+        match &daemon {
+            Some(remote) => {
+                remote.seed(&text).map_err(|e| format!("写库失败：{e}"))?;
+                println!("seeded via daemon");
+            }
+            None => {
+                let (cmd, rx) = StoreCommand::capture(CapturedItem {
+                    payload: Payload::Text(text),
+                    source_app: Some("seed".into()),
+                    captured_at: now_ms(),
+                });
+                handle.submit(cmd);
+                println!("{:?}", wait(rx)?);
+            }
+        }
         return Ok(());
     }
 
@@ -295,6 +315,28 @@ fn run_ui() -> Result<(), AnyError> {
     .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// 守护进程在跑就返回一条连接。端口文件可能是上一次运行留下的，连不上就当它不在。
+fn connect_daemon(paths: &Paths) -> Option<std::sync::Arc<Remote>> {
+    let port = std::fs::read_to_string(paths.port()).ok()?;
+    let (remote, _events, _ui) = Remote::connect(&format!("127.0.0.1:{}", port.trim())).ok()?;
+    Some(remote)
+}
+
+/// 发一条命令并等回执。本地线程和守护进程两种后端在这里被抹平——
+/// 调用方只管拼 `StoreCommand`。
+fn call<T>(handle: &StoreHandle, pair: (StoreCommand, Reply<T>)) -> StoreResult<T> {
+    let (cmd, rx) = pair;
+    if !handle.submit(cmd) {
+        return Err(StoreError::Remote("存储线程已退出".into()));
+    }
+    wait(rx)
+}
+
+fn wait<T>(rx: Reply<T>) -> StoreResult<T> {
+    rx.recv_timeout(Duration::from_secs(3))
+        .unwrap_or_else(|_| Err(StoreError::Remote("存储线程无响应".into())))
 }
 
 fn kind_of(kind: erwuzai_store::Kind) -> &'static str {

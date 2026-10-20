@@ -55,6 +55,8 @@ pub enum WireRequest {
     SetHotkey { spec: String },
     /// 托盘右键是 Win32 原生菜单，只认进程级标记——UI 换了主题就通知守护进程。
     SetMenuDark { dark: bool },
+    /// 开发用：直接塞一条文本进历史（`25zai --seed`）。
+    Seed { text: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +203,19 @@ pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
             });
             (cmd, waiter)
         }
+        WireRequest::Seed { text } => {
+            let (cmd, rx) = StoreCommand::capture(CapturedItem {
+                payload: Payload::Text(text),
+                source_app: Some("seed".into()),
+                captured_at: now_ms(),
+            });
+            let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
+                Ok(Ok(_)) => WireReply::ok_empty(),
+                Ok(Err(e)) => WireReply::err(e),
+                Err(_) => WireReply::err(StoreError::Remote("存储线程超时".into())),
+            });
+            (cmd, waiter)
+        }
         WireRequest::ArmEcho { .. }
         | WireRequest::SetHotkey { .. }
         | WireRequest::SetMenuDark { .. } => return None,
@@ -332,6 +347,28 @@ impl Remote {
         })
     }
 
+    /// 开发用：让守护进程直接收下一条文本。
+    pub fn seed(&self, text: &str) -> std::result::Result<(), String> {
+        let (tx, rx) = channel();
+        let ok = self.call(
+            WireRequest::Seed {
+                text: text.to_string(),
+            },
+            Box::new(move |r| {
+                let _ = tx.send(match (r.error, r.body) {
+                    (Some(e), _) => Err(e),
+                    (None, ReplyBody::None) => Ok(()),
+                    _ => Err("回复类型不匹配".into()),
+                });
+            }),
+        );
+        if !ok {
+            return Err("守护进程连接已断".into());
+        }
+        rx.recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap_or_else(|_| Err("守护进程无响应".into()))
+    }
+
     /// 同步托盘菜单的明暗（Win32 菜单是进程级的）。
     pub fn set_menu_dark(&self, dark: bool) -> bool {
         self.send(&Msg::Req {
@@ -440,6 +477,13 @@ impl Remote {
             }
         }
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn expect<T>(reply: WireReply, pick: impl FnOnce(ReplyBody) -> Option<T>) -> StoreResult<T> {
