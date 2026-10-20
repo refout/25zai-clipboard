@@ -45,8 +45,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=no
 
 [Languages]
-Name: "chinese"; MessagesFile: "compiler:Default.isl"
-Name: "english"; MessagesFile: "compiler:Languages\English.isl"
+; 官方翻译文件随仓库带一份：choco 装的 Inno 版本不一定自带中文，
+; 而 Default.isl 本身就是英文，不能拿它冒充中文。
+Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "autostart"; Description: "开机自动启动（后台常驻，不弹窗）"; GroupDescription: "附加任务："
