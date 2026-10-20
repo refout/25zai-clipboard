@@ -47,7 +47,7 @@ CloseApplications=no
 [Languages]
 ; 官方翻译文件随仓库带一份：choco 装的 Inno 版本不一定自带中文，
 ; 而 Default.isl 本身就是英文，不能拿它冒充中文。
-Name: "chinese"; MessagesFile: "ChineseSimplified.isl"
+Name: "chinese"; MessagesFile: "{#SourcePath}ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
