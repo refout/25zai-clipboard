@@ -30,6 +30,24 @@ pub fn window_rect(title: &str) -> Option<(i32, i32, i32, i32)> {
     }
 }
 
+/// 抽掉 eframe 之后，托盘和全局热键的消息没人再泵了——守护进程要自己跑一轮。
+///
+/// 只处理**已经排队**的消息（PeekMessageW + PM_REMOVE），拿到就分发，
+/// 没消息立刻返回，调用方自己决定睡多久。
+pub fn pump_messages() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+        };
+        let mut msg: MSG = std::mem::zeroed();
+        while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
 #[cfg(not(windows))]
 pub fn window_rect(_title: &str) -> Option<(i32, i32, i32, i32)> {
     None

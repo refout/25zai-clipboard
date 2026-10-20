@@ -1,20 +1,29 @@
 //! 25zai 桌面入口。
 //!
-//! 启动顺序严格按 docs/DESIGN.md §11：先抢实例锁，再开数据库。
-//! 反过来的话第二个实例会撞上 redb 的文件锁，报错和"数据库损坏"难以区分。
+//! 三条路径，都在同一个 exe 里：
+//!
+//! - 不带参数：确保守护进程在跑，然后让它把 UI 拉起来（启动器）
+//! - --daemon：无窗口常驻，握着存储层、监听、热键、托盘
+//! - --ui：eframe 窗口，只通过回环 TCP 跟守护进程说话，隐藏即退出
+//!
+//! 拆成两个进程的原因是内存：eframe 的窗口和 GL 上下文创建之后收不回去，
+//! 隐藏时那一百多 MB 一直挂着。UI 退出之后只剩守护进程的二十来 MB。
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod daemon;
 mod fonts;
 mod listener;
 mod secrets;
 
 use std::error::Error;
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use erwuzai_core::{request_show, InstanceError, Paths, ShowServer, SingleInstance};
-use erwuzai_platform::EchoGuard;
-use erwuzai_store::{CapturedItem, ClipboardStore, Payload, RedbStore, StoreService};
+use erwuzai_core::{request_show, Paths, SingleInstance};
+use erwuzai_store::{
+    CapturedItem, ClipboardStore, Payload, RedbStore, Remote, StoreCommand, StoreHandle,
+};
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
@@ -27,7 +36,7 @@ fn main() -> eframe::Result<()> {
 }
 
 fn run() -> Result<(), AnyError> {
-    // 开发用：`25zai --put-image <路径>` 把一张图推上剪贴板，
+    // 开发用：25zai --put-image <路径> 把一张图推上剪贴板，
     // 用来验证监听侧的图片采集。必须在抢实例锁之前处理，
     // 因为它要和正在运行的实例并存。
     if let Some(path) = arg_value("--put-image") {
@@ -50,7 +59,7 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 开发用：`25zai --put-rich <文本>` 以富文本形式写剪贴板，
+    // 开发用：25zai --put-rich <文本> 以富文本形式写剪贴板，
     // 用来验证"纯文本回放"是否真的剥掉了格式。
     if let Some(text) = arg_value("--put-rich") {
         use erwuzai_platform::{ClipboardBackend, RawClipboard, SystemClipboard};
@@ -62,7 +71,7 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 开发用：`25zai --pack-icon <源图> <目标 png>` 把任意图片压成内嵌托盘图标。
+    // 开发用：25zai --pack-icon <源图> <目标 png> 把任意图片压成内嵌托盘图标。
     // 不碰数据库，所以放在抢实例锁之前。
     if let Some((src, dst)) = arg_pair("--pack-icon") {
         let img = image::open(&src)?;
@@ -75,7 +84,7 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 开发用：`25zai --pack-image <源图> <目标 png> <边长>` 生成界面用的小图。
+    // 开发用：25zai --pack-image <源图> <目标 png> <边长> 生成界面用的小图。
     if let Some((src, dst, size)) = arg_triple("--pack-image") {
         let img = image::open(&src)?;
         let size: u32 = size.parse().map_err(|_| "边长必须是数字")?;
@@ -88,7 +97,7 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 开发用：`25zai --peek` 打印剪贴板当前内容，排查采集侧问题。
+    // 开发用：25zai --peek 打印剪贴板当前内容，排查采集侧问题。
     if std::env::args().any(|a| a == "--peek") {
         use erwuzai_platform::{ClipboardBackend, RawClipboard, SystemClipboard};
         let described = match SystemClipboard::new().read()? {
@@ -111,7 +120,14 @@ fn run() -> Result<(), AnyError> {
     let paths = Paths::new(Paths::resolve());
     paths.ensure()?;
 
-    // 开发命令（--dump 等）要独占数据库，不能因为"已有实例"就被转发掉。
+    if std::env::args().any(|a| a == "--daemon") {
+        return daemon::run().map_err(|e| e.to_string().into());
+    }
+    if std::env::args().any(|a| a == "--ui") {
+        return run_ui();
+    }
+
+    // 开发命令要独占数据库，不能因为"已有实例"就被转发掉。
     let dev_command = [
         "--dump",
         "--set-tray-icon",
@@ -124,31 +140,19 @@ fn run() -> Result<(), AnyError> {
     .iter()
     .any(|flag| std::env::args().any(|a| a == *flag));
 
-    let _instance = match SingleInstance::acquire(&paths.lock()) {
-        Ok(instance) => instance,
-        Err(InstanceError::AlreadyRunning) if !dev_command => {
-            // 第二实例：把窗口叫出来，自己退出。
-            if request_show(&paths.port()) {
-                println!("已唤出正在运行的 25仔");
-            } else {
-                eprintln!("25仔 已在运行，但无法通知它（端口文件缺失或被占用）");
-            }
-            return Ok(());
-        }
-        Err(e) => return Err(e.to_string().into()),
-    };
+    if !dev_command {
+        return launch(&paths);
+    }
 
-    // 首实例：开一个只监听回环的端口，等第二实例来敲门。
-    let (_show_server, show_rx) = ShowServer::start(&paths.port())?;
-
-    // 用 secretshape 替掉存储层的占位启发式。
+    // —— 以下只服务开发命令：自己开库，不经过守护进程 ——
+    let _instance = SingleInstance::acquire(&paths.lock()).ok();
     let store = RedbStore::open(
         paths.db(),
         paths.blobs(),
         std::sync::Arc::new(secrets::SecretshapeDetector),
     )?;
 
-    // 开发用：`25zai --set-tray-icon <路径>` 设置托盘图标（`-` 表示恢复内置）。
+    // 开发用：25zai --set-tray-icon <路径> 设置托盘图标（- 表示恢复内置）。
     if let Some(path) = arg_value("--set-tray-icon") {
         let mut config = store.config()?;
         config.tray_icon = if path == "-" { None } else { Some(path) };
@@ -157,7 +161,7 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 开发用：`25zai --set-theme <light|dark|system>`
+    // 开发用：25zai --set-theme <light|dark|system>
     if let Some(mode) = arg_value("--set-theme") {
         let mut config = store.config()?;
         config.theme = match mode.as_str() {
@@ -170,17 +174,21 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 开发用：`25zai --search <关键词>` 走和 UI 相同的存储层搜索，验证正文命中。
+    // 开发用：25zai --search <关键词> 走和 UI 相同的存储层搜索，验证正文命中。
     if let Some(query) = arg_value("--search") {
         let hits = store.search(&query, 20)?;
         println!("命中 {} 条", hits.len());
         for entry in hits {
-            println!("#{:<3} {}", entry.entry.id, entry.entry.preview.replace(['\r', '\n'], " "));
+            println!(
+                "#{:<3} {}",
+                entry.entry.id,
+                entry.entry.preview.replace(['\r', '\n'], " ")
+            );
         }
         return Ok(());
     }
 
-    // 开发用：`25zai --dump` 打印当前历史，用于无 GUI 环境下验证采集链路。
+    // 开发用：25zai --dump 打印当前历史，用于无 GUI 环境下验证采集链路。
     if std::env::args().any(|a| a == "--dump") {
         let page = store.page(None, 50)?;
         println!("共 {} 条", page.total_visible);
@@ -196,7 +204,7 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 开发用：`25zai --seed "文本"` 直接写一条历史，方便在没有监听线程时验证 UI。
+    // 开发用：25zai --seed 文本 直接写一条历史，方便在没有监听线程时验证 UI。
     if let Some(text) = seed_text() {
         let outcome = store.capture(CapturedItem {
             payload: Payload::Text(text),
@@ -207,25 +215,59 @@ fn run() -> Result<(), AnyError> {
         return Ok(());
     }
 
-    // 上次崩溃可能留下没有被任何条目引用的 blob，启动时清一次。
-    match store.sweep_orphan_blobs() {
-        Ok(0) => {}
-        Ok(n) => println!("swept {n} orphan blobs"),
-        Err(e) => eprintln!("25zai: 清理孤儿 blob 失败：{e}"),
+    Ok(())
+}
+
+/// 启动器：守护进程在就直接叫它开 UI，不在就拉起来再叫。
+fn launch(paths: &Paths) -> Result<(), AnyError> {
+    if request_show(&paths.port()) {
+        return Ok(());
     }
 
-    let config = store.config()?;
-    let page = store.page(None, 500)?;
-    println!(
-        "loaded {} entries from {}",
-        page.items.len(),
-        paths.db().display()
-    );
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--daemon");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd.spawn()?;
 
-    let guard = Arc::new(Mutex::new(EchoGuard::default()));
-    let service = StoreService::spawn(Box::new(store))?;
-    let listener = listener::start(service.handle.clone(), guard.clone())?;
-    println!("clipboard watcher started");
+    // 冷启动时守护进程要开库、扫孤儿 blob、建托盘，几百毫秒起步；
+    // 给到 5 s，太紧会在慢盘上误判成"启动失败"。
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(50));
+        if request_show(&paths.port()) {
+            return Ok(());
+        }
+    }
+    Err("守护进程启动超时".into())
+}
+
+/// UI 进程：连上守护进程，拿首屏和配置，然后开窗口。
+fn run_ui() -> Result<(), AnyError> {
+    let paths = Paths::new(Paths::resolve());
+    let port = std::fs::read_to_string(paths.port())?;
+    let (remote, events, ui_rx) = Remote::connect(&format!("127.0.0.1:{}", port.trim()))?;
+    let handle = StoreHandle::remote(remote);
+
+    let (cmd, rx) = StoreCommand::get_config();
+    handle.submit(cmd);
+    let config = rx
+        .recv_timeout(Duration::from_secs(2))
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default();
+
+    let (cmd, rx) = StoreCommand::page(None, 500);
+    handle.submit(cmd);
+    let page = rx
+        .recv_timeout(Duration::from_secs(2))
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default();
+    println!("loaded {} entries via daemon", page.items.len());
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -244,9 +286,7 @@ fn run() -> Result<(), AnyError> {
         options,
         Box::new(move |cc| {
             fonts::install_cjk(&cc.egui_ctx);
-            Ok(Box::new(app::App::new(
-                service, page, guard, listener, config, show_rx,
-            )))
+            Ok(Box::new(app::App::new(handle, events, ui_rx, config, page)))
         }),
     )
     .map_err(|e| e.to_string())?;
@@ -268,7 +308,7 @@ fn seed_text() -> Option<String> {
     arg_value("--seed")
 }
 
-/// 取 `flag` 之后的三个参数。
+/// 取 flag 之后的三个参数。
 fn arg_triple(flag: &str) -> Option<(String, String, String)> {
     let args: Vec<String> = std::env::args().collect();
     let index = args.iter().position(|a| a == flag)?;
@@ -279,7 +319,7 @@ fn arg_triple(flag: &str) -> Option<(String, String, String)> {
     ))
 }
 
-/// 取 `flag` 之后的两个参数。
+/// 取 flag 之后的两个参数。
 fn arg_pair(flag: &str) -> Option<(String, String)> {
     let args: Vec<String> = std::env::args().collect();
     let index = args.iter().position(|a| a == flag)?;

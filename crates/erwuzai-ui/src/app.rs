@@ -2,17 +2,13 @@
 
 use std::path::Path;
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use erwuzai_platform::{
-    ClipboardBackend, EchoGuard, HotkeyBackend, HotkeySpec, PlatformResult, SystemClipboard,
-    SystemHotkey, SystemTray, TrayEvent, Watcher,
-};
+use erwuzai_platform::{ClipboardBackend, HotkeySpec, SystemClipboard};
 use erwuzai_store::{
     Config, Content, EntryId, EntryView, Kind, Page, PopupPosition, Reply, StoreCommand,
-    StoreEvent, StoreHandle, StoreService, ThemeMode,
+    StoreEvent, StoreHandle, ThemeMode, UiRequest,
 };
 
 use crate::listener;
@@ -186,68 +182,28 @@ pub struct App {
     place_attempts: u8,
     total_visible: usize,
     hotkey_error: Option<String>,
-    guard: Arc<Mutex<EchoGuard>>,
     backend: SystemClipboard,
-    hotkey: Option<SystemHotkey>,
-    /// 第二实例通过回环端口发来的"唤出"请求。
-    show_rx: Receiver<()>,
+    /// 守护进程推过来的控制指令：唤起 / 打开设置 / 退出。
+    ui_rx: Receiver<UiRequest>,
     /// 录键模式：下一个按下的组合直接生效。
     recording: bool,
-    tray: Option<SystemTray>,
-    /// 托盘图标被改过，下一帧应用。
-    tray_dirty: bool,
-    _listener: Box<dyn Watcher>,
 }
 
 impl App {
     pub fn new(
-        service: StoreService,
-        page: Page,
-        guard: Arc<Mutex<EchoGuard>>,
-        listener: Box<dyn Watcher>,
+        handle: StoreHandle,
+        events: Receiver<StoreEvent>,
+        ui_rx: Receiver<UiRequest>,
         config: Config,
-        show_rx: Receiver<()>,
+        page: Page,
     ) -> Self {
-        let mut hotkey_error = None;
-        let hotkey = match SystemHotkey::new() {
-            Ok(manager) => match HotkeySpec::parse(&config.hotkey)
-                .and_then(|spec| -> PlatformResult<()> { manager.register(&spec) })
-            {
-                Ok(()) => Some(manager),
-                Err(e) => {
-                    hotkey_error = Some(format!("快捷键注册失败：{e}"));
-                    None
-                }
-            },
-            Err(e) => {
-                hotkey_error = Some(format!("快捷键不可用：{e}"));
-                None
-            }
-        };
-
-        // 托盘和热键一样，必须在有消息循环的主线程上创建。
-        let tray = match SystemTray::new(
-            "25仔 — 剪贴板历史",
-            config.tray_icon.as_deref().map(Path::new),
-        ) {
-            Ok(tray) => {
-                println!("tray: created");
-                Some(tray)
-            }
-            Err(e) => {
-                eprintln!("25zai: 托盘创建失败：{e}");
-                None
-            }
-        };
-
-        // 没有任何"叫回来"的手段时不能自动隐藏，否则窗口一失焦就再也开不了。
-        // 热键和托盘满足其一即可。
-        let forced_open = std::env::var("25ZAI_KEEP_OPEN").is_ok();
-        let hide_on_blur = (hotkey.is_some() || tray.is_some()) && !forced_open;
+        // 热键和托盘都在守护进程里，"叫回来"的手段一定存在，
+        // 除非调试时显式要求常驻。
+        let hide_on_blur = std::env::var("25ZAI_KEEP_OPEN").is_err();
 
         Self {
-            handle: service.handle,
-            events: service.events,
+            handle,
+            events,
             total_visible: page.total_visible,
             entries: page.items,
             search_extra: Vec::new(),
@@ -281,15 +237,11 @@ impl App {
             startup: true,
             pending_pos: None,
             place_attempts: 0,
-            hotkey_error,
-            guard,
+            // 注册结果由守护进程决定，UI 这边只在改键失败时显示错误。
+            hotkey_error: None,
             backend: SystemClipboard::new(),
-            hotkey,
-            show_rx,
+            ui_rx,
             recording: false,
-            tray,
-            tray_dirty: false,
-            _listener: listener,
         }
     }
 
@@ -431,10 +383,9 @@ impl App {
         if self.window_pinned {
             return;
         }
+        // 拆分之后"隐藏"就是退出整个 UI 进程——窗口留着只会继续占着一百多 MB。
         self.visible = false;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        // 这一帧马上就要结束，先把下一次重绘挂上，否则事件循环直接睡过去。
-        ctx.request_repaint_after(HIDDEN_POLL);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     fn show(&mut self, ctx: &egui::Context) {
@@ -569,23 +520,17 @@ impl App {
         texture
     }
 
-    fn poll_tray(&mut self, ctx: &egui::Context) {
-        let Some(tray) = &self.tray else { return };
-        match tray.poll() {
-            Some(TrayEvent::Show) => self.show(ctx),
-            Some(TrayEvent::Settings) => {
-                self.show(ctx);
-                self.show_settings = true;
+    /// 守护进程推过来的指令：热键、托盘、第二实例都从这条通路进来。
+    fn poll_ui(&mut self, ctx: &egui::Context) {
+        while let Ok(cmd) = self.ui_rx.try_recv() {
+            match cmd {
+                UiRequest::Show => self.show(ctx),
+                UiRequest::ShowSettings => {
+                    self.show(ctx);
+                    self.show_settings = true;
+                }
+                UiRequest::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
-            Some(TrayEvent::Quit) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            None => {}
-        }
-    }
-
-    fn poll_hotkey(&mut self, ctx: &egui::Context) {
-        let Some(hotkey) = &self.hotkey else { return };
-        if hotkey.poll_pressed() {
-            self.show(ctx);
         }
     }
 
@@ -606,20 +551,12 @@ impl App {
 
         // 哈希必须基于"最终写进去的字节"，纯文本转换之后算。
         let hash = listener::hash_raw(&raw);
-        if let Ok(mut guard) = self.guard.lock() {
-            guard.arm(hash);
-        }
+        // 回声抑制的守卫在守护进程里（监听线程也在那边），这里只是通知它布防。
+        self.handle.arm_echo(Some(hash));
         if let Err(e) = self.backend.write(&raw) {
-            if let Ok(mut guard) = self.guard.lock() {
-                guard.disarm();
-            }
+            self.handle.arm_echo(None);
             eprintln!("25zai: 写剪贴板失败：{e}");
             return;
-        }
-        if let Some(sequence) = self.backend.sequence() {
-            if let Ok(mut guard) = self.guard.lock() {
-                guard.note_sequence(sequence);
-            }
         }
 
         let (cmd, _reply) = StoreCommand::touch(id);
@@ -645,27 +582,13 @@ impl App {
 
     /// 应用一个新组合。失败时保留原来那个，并显示原因。
     fn apply_spec(&mut self, spec: HotkeySpec) {
-        let outcome = match &self.hotkey {
-            Some(manager) => manager.rebind(&spec),
-            None => match SystemHotkey::new() {
-                Ok(manager) => match manager.register(&spec) {
-                    Ok(()) => {
-                        self.hotkey = Some(manager);
-                        Ok(())
-                    }
-                    Err(e) => Err(e),
-                },
-                Err(e) => Err(e),
-            },
-        };
-
-        match outcome {
+        // 热键归守护进程所有：注册失败时它会把旧的装回去，这里只负责显示结果。
+        let text = spec.to_string();
+        match self.handle.set_hotkey(&text) {
             Ok(()) => {
                 self.hotkey_error = None;
-                self.config.hotkey = spec.to_string();
+                self.config.hotkey = text;
                 self.config_dirty = true;
-                // 现在有办法唤出了，可以开启失焦隐藏。
-                self.hide_on_blur = std::env::var("25ZAI_KEEP_OPEN").is_err();
             }
             Err(e) => self.hotkey_error = Some(format!("注册失败：{e}")),
         }
@@ -1104,13 +1027,11 @@ impl App {
                         {
                             self.config.tray_icon = Some(path.to_string_lossy().into_owned());
                             self.config_dirty = true;
-                            self.tray_dirty = true;
                         }
                     }
                     if self.config.tray_icon.is_some() && ui.button("恢复").clicked() {
                         self.config.tray_icon = None;
                         self.config_dirty = true;
-                        self.tray_dirty = true;
                     }
                 });
                 ui.end_row();
@@ -1146,7 +1067,7 @@ impl eframe::App for App {
         self.drain_events();
         self.poll_search();
         let ctx = ui.ctx().clone();
-        self.poll_hotkey(&ctx);
+        self.poll_ui(&ctx);
 
         if self.appearance_dirty {
             self.appearance_dirty = false;
@@ -1159,7 +1080,8 @@ impl eframe::App for App {
         let menu_dark = ui.style().visuals.dark_mode;
         if self.menu_dark != Some(menu_dark) {
             self.menu_dark = Some(menu_dark);
-            erwuzai_platform::set_menu_dark_mode(menu_dark);
+            // 托盘菜单在守护进程里，只能让它去调 uxtheme。
+            self.handle.set_menu_dark(menu_dark);
         }
 
         if !self.placed_once {
@@ -1167,11 +1089,6 @@ impl eframe::App for App {
             self.place_window(&ctx);
         }
 
-        self.poll_tray(&ctx);
-        // 第二实例敲过门就把窗口叫出来。
-        while self.show_rx.try_recv().is_ok() {
-            self.show(&ctx);
-        }
         self.capture_hotkey(&ctx);
 
         // 启动首帧：窗口一直是隐藏的，先把位置摆好再露出来，避免闪一下默认位置。
@@ -1234,13 +1151,6 @@ impl eframe::App for App {
                     self.list_view(ui, &ctx);
                 }
             });
-
-        if self.tray_dirty {
-            self.tray_dirty = false;
-            if let Some(tray) = &self.tray {
-                tray.apply_icon(self.config.tray_icon.as_deref().map(Path::new));
-            }
-        }
 
         if self.config_dirty {
             self.config_dirty = false;

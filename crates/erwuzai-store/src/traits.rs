@@ -32,6 +32,9 @@ pub enum StoreError {
     AlreadyOpen,
     #[error("codec error: {0}")]
     Codec(String),
+    /// 来自守护进程的错误（UI 只是原样展示）。
+    #[error("remote error: {0}")]
+    Remote(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -213,16 +216,57 @@ impl StoreCommand {
 /// 命令下行走 `StoreHandle`，事件上行走独立的 `Receiver`。
 #[derive(Clone)]
 pub struct StoreHandle {
-    tx: Sender<StoreCommand>,
+    tx: Option<Sender<StoreCommand>>,
+    remote: Option<std::sync::Arc<crate::wire::Remote>>,
 }
 
 impl StoreHandle {
     pub fn new(tx: Sender<StoreCommand>) -> Self {
-        Self { tx }
+        Self {
+            tx: Some(tx),
+            remote: None,
+        }
     }
 
-    /// 返回 `false` 表示服务线程已退出，调用方应当停止重试并提示重启。
+    /// 拆分进程之后 UI 用的入口：命令走 TCP 到守护进程。
+    pub fn remote(remote: std::sync::Arc<crate::wire::Remote>) -> Self {
+        Self {
+            tx: None,
+            remote: Some(remote),
+        }
+    }
+
+    /// 返回 `false` 表示服务线程（或守护进程连接）已断，调用方应停止重试。
     pub fn submit(&self, cmd: StoreCommand) -> bool {
-        self.tx.send(cmd).is_ok()
+        match (&self.tx, &self.remote) {
+            (Some(tx), _) => tx.send(cmd).is_ok(),
+            (_, Some(remote)) => remote.submit(cmd),
+            _ => false,
+        }
+    }
+
+    /// 写剪贴板前后的回声抑制。只有拆分模式有意义——本地模式下监听线程
+    /// 和写剪贴板在同一个进程里，走的是共享的 `EchoGuard`。
+    pub fn arm_echo(&self, hash: Option<[u8; 32]>) -> bool {
+        match &self.remote {
+            Some(remote) => remote.arm_echo(hash),
+            None => false,
+        }
+    }
+
+    /// 同步托盘菜单的明暗（Win32 菜单是进程级的，托盘在守护进程里）。
+    pub fn set_menu_dark(&self, dark: bool) -> bool {
+        match &self.remote {
+            Some(remote) => remote.set_menu_dark(dark),
+            None => false,
+        }
+    }
+
+    /// 改全局快捷键（守护进程持有热键）。
+    pub fn set_hotkey(&self, spec: &str) -> std::result::Result<(), String> {
+        match &self.remote {
+            Some(remote) => remote.set_hotkey(spec),
+            None => Err("本地模式不支持改键".into()),
+        }
     }
 }

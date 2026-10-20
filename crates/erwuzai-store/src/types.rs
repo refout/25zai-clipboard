@@ -63,7 +63,7 @@ pub struct EntryRecord {
 }
 
 /// 返回给 UI 的视图：记录 + 当前位置。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryView {
     pub entry: EntryRecord,
     /// 在 `usage_order` 中的位置。
@@ -115,7 +115,7 @@ pub struct CapturedItem {
 }
 
 /// 回放时读出的完整内容。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Content {
     Text(String),
     RichText {
@@ -130,7 +130,7 @@ pub enum Content {
     },
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Page {
     pub items: Vec<EntryView>,
     /// 下一页游标（本页最后一条的 seq）。`None` 表示到底。
@@ -164,7 +164,7 @@ pub enum SkipReason {
     ExcludedApp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TouchOutcome {
     Moved { seq: Seq, last_used_at: i64 },
     /// `Config::replay_reorders == false`，顺序未变。
@@ -254,7 +254,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Stats {
     pub total_entries: usize,
     pub pinned_entries: usize,
@@ -265,7 +265,7 @@ pub struct Stats {
 }
 
 /// 服务线程推给 UI 的事件。UI 只消费事件，不自行查库确认。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StoreEvent {
     Added(Vec<EntryView>),
     Moved {

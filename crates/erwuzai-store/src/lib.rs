@@ -17,6 +17,7 @@ pub mod sensitive;
 pub mod service;
 pub mod traits;
 pub mod types;
+pub mod wire;
 
 pub use redb_store::RedbStore;
 pub use sensitive::{HeuristicDetector, SecretDetector};
@@ -24,4 +25,5 @@ pub use service::StoreService;
 pub use traits::{
     ClipboardStore, Reply, StoreCommand, StoreError, StoreHandle, StoreResult,
 };
+pub use wire::{to_command, Msg, Remote, UiRequest, WireReply, WireRequest};
 pub use types::*;

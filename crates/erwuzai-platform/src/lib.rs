@@ -26,7 +26,7 @@ pub use menu::set_menu_dark_mode;
 pub use source::{NoSourceApp, SourceAppResolver};
 pub use system::{cursor_placement, CursorPlacement, SystemClipboard, SystemHotkey, SystemSourceApp};
 pub use tray::{SystemTray, TrayEvent};
-pub use window::window_rect;
+pub use window::{pump_messages, window_rect};
 
 use thiserror::Error;
 
