@@ -153,6 +153,9 @@ pub struct App {
     /// 唤起前的前台窗口。点条目时把内容粘回去，就是粘进这个窗口。
     paste_target: isize,
     show_settings: bool,
+    /// 进程是被"打开设置"拉起来的：第一次 show 时直接进设置页。
+    /// 只对第一次生效，之后再唤起回到列表。
+    open_settings: bool,
     /// 首帧也要定位到光标，否则第一次出现还是屏幕中央。
     placed_once: bool,
     config: Config,
@@ -196,6 +199,7 @@ impl App {
         ui_rx: Receiver<UiRequest>,
         config: Config,
         page: Page,
+        open_settings: bool,
     ) -> Self {
         // 热键和托盘都在守护进程里，"叫回来"的手段一定存在，
         // 除非调试时显式要求常驻。
@@ -223,6 +227,7 @@ impl App {
             window_pinned: false,
             paste_target: 0,
             show_settings: false,
+            open_settings,
             placed_once: false,
             config,
             config_dirty: false,
@@ -402,7 +407,8 @@ impl App {
         self.query.clear();
         self.selected = 0;
         self.focus_requested = false;
-        self.show_settings = false;
+        // 托盘"设置"拉起来的新进程：第一次 show 就落在设置页。
+        self.show_settings = std::mem::take(&mut self.open_settings);
         self.window_pinned = false;
         // 重新开始一轮"先拿到焦点、再谈失焦"的判定。
         self.seen_focus = false;

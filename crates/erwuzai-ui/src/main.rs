@@ -286,7 +286,10 @@ fn run_ui() -> Result<(), AnyError> {
         options,
         Box::new(move |cc| {
             fonts::install_cjk(&cc.egui_ctx);
-            Ok(Box::new(app::App::new(handle, events, ui_rx, config, page)))
+            let settings = std::env::args().any(|a| a == "--settings");
+            Ok(Box::new(app::App::new(
+                handle, events, ui_rx, config, page, settings,
+            )))
         }),
     )
     .map_err(|e| e.to_string())?;

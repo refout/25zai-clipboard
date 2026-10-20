@@ -240,6 +240,10 @@ impl Ctx {
         }
         let mut cmd = std::process::Command::new(&self.exe);
         cmd.arg("--ui");
+        // UI 是刚起的进程，没有连接可以推 UiRequest，只能靠启动参数。
+        if settings {
+            cmd.arg("--settings");
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
