@@ -21,7 +21,10 @@ $setupName = "25zai-$tag-windows-x64-setup.exe"
 $setupUrl = "$base/$tag/$setupName"
 
 Write-Host "拉取 $tag 的 SHA256..."
-$sums = (Invoke-WebRequest "$base/$tag/SHA256SUMS.txt" -UseBasicParsing).Content
+$resp = Invoke-WebRequest "$base/$tag/SHA256SUMS.txt" -UseBasicParsing
+# Release 资产按 application/octet-stream 下发，PS7 会把 Content 给成 byte[]，
+# 直接拿去正则切分只会得到一串数字，永远匹配不到 setup.exe。
+$sums = if ($resp.Content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($resp.Content) } else { $resp.Content }
 $line = [regex]::Split($sums, '\r?\n') | Where-Object { $_ -match 'setup\.exe' } | Select-Object -First 1
 if (-not $line) { throw "SHA256SUMS 里找不到 setup.exe" }
 $sha = ([regex]::Split($line.Trim(), '\s+'))[0].ToUpper()
