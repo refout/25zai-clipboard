@@ -37,6 +37,12 @@ pub const USAGE_ORDER: TableDefinition<u64, &[u8]> = TableDefinition::new("usage
 /// entry_id → seq。反向索引，回放和清理都需要它。
 pub const SEQ_INDEX: TableDefinition<u64, u64> = TableDefinition::new("seq_index");
 
+/// entry_id → 手动排序的序号（升序 = 从上到下）。
+///
+/// 独立一张表而不是写进 `EntryRecord`：`entries` 必须不可变，
+/// 拖拽排序不该重写整条记录，也不需要数据迁移。
+pub const MANUAL_ORDER: TableDefinition<u64, u64> = TableDefinition::new("manual_order");
+
 /// 固定条目的 entry_id 集合。
 ///
 /// 存 id 而不是 seq：`touch` 会把条目的 seq 换掉，id 不会。

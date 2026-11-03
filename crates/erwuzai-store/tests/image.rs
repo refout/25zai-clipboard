@@ -68,7 +68,7 @@ fn image_blob_lifecycle() {
         store.capture(image_item(bytes.clone(), 2)).unwrap(),
         CaptureOutcome::Moved { .. }
     ));
-    assert_eq!(store.page(Scope::History, None, 10).unwrap().total_visible, 1);
+    assert_eq!(store.page(Scope::History, SortMode::Recent, None, 10).unwrap().total_visible, 1);
 
     // 删除后 blob 文件必须消失
     assert!(store.delete(entry.entry.id).unwrap());

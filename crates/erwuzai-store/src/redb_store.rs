@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::schema::{
     decode_u64, decode_usage, encode_u64, encode_usage, meta_key, CONFIG, CONFIG_KEY,
-    CONTENT_INDEX, ENTRIES, META, PINNED, SCHEMA_VERSION, SEQ_INDEX, TEXTS, USAGE_ORDER,
+    CONTENT_INDEX, ENTRIES, MANUAL_ORDER, META, PINNED, SCHEMA_VERSION, SEQ_INDEX, TEXTS,
+    USAGE_ORDER,
 };
 use crate::sensitive::{HeuristicDetector, SecretDetector};
 use crate::traits::{ClipboardStore, StoreError, StoreResult};
@@ -136,10 +137,78 @@ impl RedbStore {
             w.open_table(USAGE_ORDER)?;
             w.open_table(SEQ_INDEX)?;
             w.open_table(PINNED)?;
+            w.open_table(MANUAL_ORDER)?;
             w.open_table(CONFIG)?;
         }
         w.commit()?;
         Ok(())
+    }
+
+    /// 非默认排序：把该视图的条目全取出来再排。
+    ///
+    /// 历史上限 500 条、笔记量级更小，一次全取比在游标里做多路归并简单得多。
+    fn page_sorted(&self, scope: Scope, sort: SortMode, limit: usize) -> StoreResult<Page> {
+        let r = self.db.begin_read()?;
+        let usage = r.open_table(USAGE_ORDER)?;
+        let entries = r.open_table(ENTRIES)?;
+
+        let mut views: Vec<EntryView> = Vec::new();
+        for item in usage.range(0u64..)?.rev() {
+            let (k, v) = item?;
+            let (id, last_used_at) = decode_usage(v.value())
+                .ok_or_else(|| StoreError::Codec("usage slot 长度错误".into()))?;
+            let Some(rec) = read_record_opt(&entries, id)? else {
+                continue;
+            };
+            if !scope.matches(rec.kind) {
+                continue;
+            }
+            views.push(self.view(rec, k.value(), last_used_at));
+        }
+        let total_visible = views.len();
+
+        match sort {
+            SortMode::CreatedDesc => {
+                views.sort_by_key(|a| std::cmp::Reverse(a.entry.created_at))
+            }
+            SortMode::CreatedAsc => {
+                views.sort_by_key(|a| a.entry.created_at)
+            }
+            SortMode::Kind => views.sort_by(|a, b| {
+                kind_rank(a.entry.kind)
+                    .cmp(&kind_rank(b.entry.kind))
+                    .then(b.seq.cmp(&a.seq))
+            }),
+            SortMode::Manual => {
+                let manual = r.open_table(MANUAL_ORDER)?;
+                let mut ranks = std::collections::HashMap::new();
+                for item in manual.range(0u64..)? {
+                    let (k, v) = item?;
+                    ranks.insert(k.value(), v.value());
+                }
+                // 没有排过的条目排在最后，按最近使用倒序——新条目天然落在末尾，
+                // 不会打乱用户已经拖好的顺序。
+                views.sort_by_key(|v| {
+                    (
+                        ranks.get(&v.entry.id).copied().unwrap_or(u64::MAX),
+                        std::cmp::Reverse(v.seq),
+                    )
+                });
+            }
+            SortMode::Recent => unreachable!("Recent 走分页路径"),
+        }
+
+        // 固定条目在非手动模式下仍然置顶；手动模式完全按用户拖的顺序。
+        if sort != SortMode::Manual {
+            views.sort_by_key(|a| std::cmp::Reverse(a.entry.pinned));
+        }
+
+        views.truncate(limit);
+        Ok(Page {
+            items: views,
+            next_cursor: None,
+            total_visible,
+        })
     }
 
     fn prepare(&self, payload: Payload, cfg: &Config) -> StoreResult<PreparedOutcome> {
@@ -505,7 +574,17 @@ impl ClipboardStore for RedbStore {
         w.commit()?;
         Ok(Some(view))
     }
-    fn page(&self, scope: Scope, cursor: Option<Seq>, limit: usize) -> StoreResult<Page> {
+    fn page(
+        &self,
+        scope: Scope,
+        sort: SortMode,
+        cursor: Option<Seq>,
+        limit: usize,
+    ) -> StoreResult<Page> {
+        // 只有默认排序走分页；其余几种都要先看全量再排。
+        if sort != SortMode::Recent {
+            return self.page_sorted(scope, sort, limit);
+        }
         let r = self.db.begin_read()?;
         let usage = r.open_table(USAGE_ORDER)?;
         let entries = r.open_table(ENTRIES)?;
@@ -595,6 +674,20 @@ impl ClipboardStore for RedbStore {
             next_cursor,
             total_visible,
         })
+    }
+
+    /// 整份手动顺序落盘。UI 拖完把当前顺序整条发过来，
+    /// 存储层只按下标写序号——不做间隙分配，也就不需要重排逻辑。
+    fn set_manual_order(&self, ids: &[EntryId]) -> StoreResult<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut manual = w.open_table(MANUAL_ORDER)?;
+            for (rank, id) in ids.iter().enumerate() {
+                manual.insert(*id, rank as u64)?;
+            }
+        }
+        w.commit()?;
+        Ok(())
     }
 
     fn search(&self, scope: Scope, query: &str, limit: usize) -> StoreResult<Vec<EntryView>> {
@@ -862,6 +955,32 @@ impl ClipboardStore for RedbStore {
         for h in &evicted_blobs {
             self.remove_blob(h);
         }
+        // 排序行按 entry_id 存，删除条目时没顺手清——id 不复用，残留不影响
+        // 排序，但会一直占地方，启动时兜底扫一遍。
+        {
+            let alive: std::collections::HashSet<EntryId> = {
+                let r = self.db.begin_read()?;
+                let entries = r.open_table(ENTRIES)?;
+                entries
+                    .range(0u64..)?
+                    .map(|item| Ok(item?.0.value()))
+                    .collect::<StoreResult<_>>()?
+            };
+            let w = self.db.begin_write()?;
+            let mut manual = w.open_table(MANUAL_ORDER)?;
+            let stale: Vec<EntryId> = manual
+                .range(0u64..)?
+                .map(|item| Ok(item?.0.value()))
+                .collect::<StoreResult<Vec<_>>>()?
+                .into_iter()
+                .filter(|id| !alive.contains(id))
+                .collect();
+            for id in stale {
+                manual.remove(id)?;
+            }
+            drop(manual);
+            w.commit()?;
+        }
         Ok(removed)
     }
 
@@ -1117,6 +1236,17 @@ fn cleanup(
 ///
 /// 只用于 `content_index` 的一一对应（不变量 I2）和 blob 命名，
 /// 不参与任何去重判断。
+/// 按类型分组时的组内顺序：笔记最前，图片最后。
+fn kind_rank(kind: Kind) -> u8 {
+    match kind {
+        Kind::Note => 0,
+        Kind::Text => 1,
+        Kind::RichText => 2,
+        Kind::FileList => 3,
+        Kind::Image => 4,
+    }
+}
+
 fn note_hash(id: EntryId, text: &str) -> ContentHash {
     let mut h = blake3::Hasher::new();
     h.update(b"25zai-note");

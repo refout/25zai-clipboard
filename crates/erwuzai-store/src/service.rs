@@ -82,8 +82,19 @@ fn dispatch(store: &dyn ClipboardStore, cmd: StoreCommand, evt: &Sender<StoreEve
             warn(&r, evt);
             let _ = reply.send(r);
         }
-        StoreCommand::Page { scope, cursor, limit, reply } => {
-            let r = store.page(scope, cursor, limit);
+        StoreCommand::Page {
+            scope,
+            sort,
+            cursor,
+            limit,
+            reply,
+        } => {
+            let r = store.page(scope, sort, cursor, limit);
+            warn(&r, evt);
+            let _ = reply.send(r);
+        }
+        StoreCommand::SetManualOrder { ids, reply } => {
+            let r = store.set_manual_order(&ids);
             warn(&r, evt);
             let _ = reply.send(r);
         }

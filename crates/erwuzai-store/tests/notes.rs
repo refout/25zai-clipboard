@@ -34,11 +34,11 @@ fn notes_do_not_show_up_in_history() {
     store.capture(text("clip", 1_000)).unwrap();
     store.insert_note("想法").unwrap();
 
-    let history = store.page(Scope::History, None, 10).unwrap();
+    let history = store.page(Scope::History, SortMode::Recent, None, 10).unwrap();
     assert_eq!(previews(&history), vec!["clip"]);
     assert_eq!(history.total_visible, 1);
 
-    let notes = store.page(Scope::Notes, None, 10).unwrap();
+    let notes = store.page(Scope::Notes, SortMode::Recent, None, 10).unwrap();
     assert_eq!(previews(&notes), vec!["想法"]);
     assert_eq!(notes.total_visible, 1);
     assert!(notes.items[0].entry.kind.is_note());
@@ -55,7 +55,7 @@ fn same_note_twice_is_two_entries() {
     let a = store.insert_note("同一句话").unwrap().unwrap();
     let b = store.insert_note("同一句话").unwrap().unwrap();
     assert_ne!(a.entry.id, b.entry.id);
-    assert_eq!(store.page(Scope::Notes, None, 10).unwrap().total_visible, 2);
+    assert_eq!(store.page(Scope::Notes, SortMode::Recent, None, 10).unwrap().total_visible, 2);
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -74,10 +74,10 @@ fn notes_are_not_evicted_by_limit() {
         store.capture(text(&format!("clip{i}"), 1_000 + i)).unwrap();
     }
 
-    let notes = store.page(Scope::Notes, None, 10).unwrap();
+    let notes = store.page(Scope::Notes, SortMode::Recent, None, 10).unwrap();
     assert_eq!(previews(&notes), vec!["留着"]);
     // 笔记不占 limit 配额，历史仍然只留 1 条。
-    assert_eq!(store.page(Scope::History, None, 10).unwrap().total_visible, 1);
+    assert_eq!(store.page(Scope::History, SortMode::Recent, None, 10).unwrap().total_visible, 1);
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -117,7 +117,7 @@ fn update_note_keeps_position_and_changes_text() {
     assert_eq!(updated.entry.preview, "改过了");
 
     // 位置不变：仍是新的在上，改过的那条还在后面。
-    let page = store.page(Scope::Notes, None, 10).unwrap();
+    let page = store.page(Scope::Notes, SortMode::Recent, None, 10).unwrap();
     assert_eq!(previews(&page), vec!["第二条", "改过了"]);
 
     // 正文也换了，旧词搜不到、新词搜得到。
@@ -148,9 +148,9 @@ fn delete_note_updates_total() {
 
     let note = store.insert_note("删掉我").unwrap().unwrap();
     assert!(store.delete(note.entry.id).unwrap());
-    assert_eq!(store.page(Scope::Notes, None, 10).unwrap().total_visible, 0);
+    assert_eq!(store.page(Scope::Notes, SortMode::Recent, None, 10).unwrap().total_visible, 0);
     // 历史视图的计数不能被笔记的增删带偏。
-    assert_eq!(store.page(Scope::History, None, 10).unwrap().total_visible, 0);
+    assert_eq!(store.page(Scope::History, SortMode::Recent, None, 10).unwrap().total_visible, 0);
 
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -161,7 +161,7 @@ fn empty_note_is_ignored() {
     let store = RedbStore::open_default(dir.join("25zai.db"), dir.join("blobs")).unwrap();
 
     assert!(store.insert_note("   ").unwrap().is_none());
-    assert_eq!(store.page(Scope::Notes, None, 10).unwrap().total_visible, 0);
+    assert_eq!(store.page(Scope::Notes, SortMode::Recent, None, 10).unwrap().total_visible, 0);
 
     let _ = std::fs::remove_dir_all(dir);
 }

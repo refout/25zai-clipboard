@@ -215,7 +215,13 @@ fn run() -> Result<(), AnyError> {
         } else {
             Scope::History
         };
-        let page = call(&handle, StoreCommand::page(scope, None, 50))?;
+        // 按 UI 当前用的排序方式打印，否则调试看到的顺序和界面不一致。
+        let cfg = call(&handle, StoreCommand::get_config())?;
+        let sort = match scope {
+            Scope::History => cfg.sort,
+            Scope::Notes => cfg.note_sort,
+        };
+        let page = call(&handle, StoreCommand::page(scope, sort, None, 50))?;
         println!("共 {} 条", page.total_visible);
         for entry in page.items {
             println!(
@@ -315,7 +321,11 @@ fn run_ui() -> Result<(), AnyError> {
     } else {
         Scope::History
     };
-    let (cmd, rx) = StoreCommand::page(scope, None, 500);
+    let sort = match scope {
+        Scope::History => config.sort,
+        Scope::Notes => config.note_sort,
+    };
+    let (cmd, rx) = StoreCommand::page(scope, sort, None, 500);
     handle.submit(cmd);
     let page = rx
         .recv_timeout(Duration::from_secs(2))

@@ -9,7 +9,7 @@ use erwuzai_core::i18n::{tr, tr_fmt};
 use erwuzai_platform::{ClipboardBackend, HotkeySpec, SystemClipboard};
 use erwuzai_store::{
     Config, Content, EntryId, EntryView, Kind, Language, Page, PopupPosition, Reply, Scope,
-    StoreCommand, StoreEvent, StoreHandle, ThemeMode, UiRequest,
+    SortMode, StoreCommand, StoreEvent, StoreHandle, ThemeMode, UiRequest,
 };
 
 use crate::listener;
@@ -239,6 +239,8 @@ pub struct App {
     note_edit_focus: bool,
     /// 切换视图后重载分页的回执。
     page_in_flight: Option<Reply<Page>>,
+    /// 手动排序时正在拖的行（rows 的下标）。
+    drag_from: Option<usize>,
 }
 
 impl App {
@@ -304,6 +306,7 @@ impl App {
             note_input_id: None,
             note_edit_focus: false,
             page_in_flight: None,
+            drag_from: None,
         }
     }
 
@@ -474,14 +477,79 @@ impl App {
         self.scroll_to = Some(0);
         self.focus_requested = false;
         self.note_focus = view == View::Notes;
+        self.drag_from = None;
+        self.reload_page();
+    }
+
+    fn sort_mode(&self) -> SortMode {
+        match self.view {
+            View::History => self.config.sort,
+            View::Notes => self.config.note_sort,
+        }
+    }
+
+    fn set_sort(&mut self, sort: SortMode) {
+        if sort == self.sort_mode() {
+            return;
+        }
+        match self.view {
+            View::History => self.config.sort = sort,
+            View::Notes => self.config.note_sort = sort,
+        }
+        self.config_dirty = true;
+        self.drag_from = None;
+        self.selected = 0;
+        self.scroll_to = Some(0);
         self.reload_page();
     }
 
     fn reload_page(&mut self) {
-        let (cmd, rx) = StoreCommand::page(self.view.scope(), None, PAGE_LIMIT);
+        let (cmd, rx) = StoreCommand::page(self.view.scope(), self.sort_mode(), None, PAGE_LIMIT);
         if self.handle.submit(cmd) {
             self.page_in_flight = Some(rx);
         }
+    }
+
+    /// 把当前顺序整份发给存储层。手动模式下 entries 就是全部可见条目。
+    fn apply_manual_order(&mut self) {
+        let ids: Vec<EntryId> = self.entries.iter().map(|e| e.entry.id).collect();
+        let (cmd, _rx) = StoreCommand::set_manual_order(ids);
+        self.handle.submit(cmd);
+    }
+
+    /// 在 entries 里把某条移动 delta 格（Ctrl+↑ / Ctrl+↓）。
+    fn move_entry(&mut self, id: EntryId, delta: isize) {
+        let Some(pos) = self.entries.iter().position(|e| e.entry.id == id) else {
+            return;
+        };
+        let last = self.entries.len().saturating_sub(1) as isize;
+        let target = (pos as isize + delta).clamp(0, last) as usize;
+        if target == pos {
+            return;
+        }
+        let item = self.entries.remove(pos);
+        self.entries.insert(target, item);
+        self.selected = target;
+        self.scroll_to = Some(target);
+        self.apply_manual_order();
+    }
+
+    /// 拖放结束：把被拖的条目挪到目标行所在的位置。
+    fn drop_entry(&mut self, moved: EntryId, target: EntryId) {
+        let (Some(from), Some(to)) = (
+            self.entries.iter().position(|e| e.entry.id == moved),
+            self.entries.iter().position(|e| e.entry.id == target),
+        ) else {
+            return;
+        };
+        if from == to {
+            return;
+        }
+        let item = self.entries.remove(from);
+        self.entries.insert(to, item);
+        self.selected = to;
+        self.scroll_to = Some(to);
+        self.apply_manual_order();
     }
 
     fn poll_page(&mut self) {
@@ -1410,15 +1478,17 @@ impl eframe::App for App {
 
 impl App {
     fn list_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let (down, up, enter, esc, f2) = ctx.input(|i| {
+        let (down, up, enter, esc, f2, ctrl) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowDown),
                 i.key_pressed(egui::Key::ArrowUp),
                 i.key_pressed(egui::Key::Enter),
                 i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::F2),
+                i.modifiers.ctrl || i.modifiers.command,
             )
         });
+        let manual = self.sort_mode() == SortMode::Manual;
         // 这一帧的 Enter 归谁：笔记输入框 / 行内编辑 / 列表回放，三者只能有一个。
         let note_input_focused = self
             .note_input_id
@@ -1473,10 +1543,10 @@ impl App {
             self.selected = 0;
         } else {
             let before = self.selected;
-            if down {
+            if down && !ctrl {
                 self.selected = (self.selected + 1).min(rows.len() - 1);
             }
-            if up {
+            if up && !ctrl {
                 self.selected = self.selected.saturating_sub(1);
             }
             if self.selected >= rows.len() {
@@ -1484,6 +1554,11 @@ impl App {
             }
             if self.selected != before {
                 self.scroll_to = Some(self.selected);
+            }
+            // 手动排序：Ctrl+↑ / Ctrl+↓ 挪一格。
+            if manual && ctrl && (down || up) {
+                let id = rows[self.selected].id;
+                self.move_entry(id, if down { 1 } else { -1 });
             }
             if enter && !note_input_focused && !editing {
                 let id = rows[self.selected].id;
@@ -1513,6 +1588,20 @@ impl App {
                             self.switch_view(view);
                         }
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut sort = self.sort_mode();
+                        egui::ComboBox::from_id_salt("sort-mode")
+                            .selected_text(sort.label())
+                            .width(104.0)
+                            .show_ui(ui, |ui| {
+                                for mode in SortMode::ALL {
+                                    if ui.selectable_label(sort == mode, mode.label()).clicked() {
+                                        sort = mode;
+                                    }
+                                }
+                            });
+                        self.set_sort(sort);
+                    });
                 });
             });
             ui.add_space(6.0);
@@ -1604,6 +1693,13 @@ impl App {
                 }
             }));
 
+            // 手动排序是唯一需要解释的排序：其他模式都是算出来的，只有它要用户动手。
+            if manual {
+                inset_right(ui, |ui| {
+                    ui.weak(tr("拖动行可调整顺序"));
+                });
+            }
+
             if let Some(err) = &self.hotkey_error {
                 ui.add_space(4.0);
                 inset_right(ui, |ui| {
@@ -1637,6 +1733,8 @@ impl App {
             // 改为全量渲染 + 选中行 scroll_to_me。内存索引上限 500 条，
             // 这个量级的布局开销可以接受。
             let scroll_target = self.scroll_to.take();
+            // 每行的矩形：拖放时靠它判断指针落在哪一行。
+            let mut row_rects: Vec<egui::Rect> = Vec::with_capacity(rows.len());
 
             // 滚动区不再收窄：悬浮滚动条画在它的右边缘，也就是窗口右边框上。
             // 内容自己退 EDGE_PAD，条与文字之间才有间隙。
@@ -1763,6 +1861,20 @@ impl App {
                         };
                         ui.painter()
                             .set(bg_slot, egui::Shape::rect_filled(rect, 4.0, fill));
+                        // 拖动中：在落点行顶部画一条线，告诉用户松手会插到哪。
+                        if manual
+                            && hovered
+                            && self.drag_from.is_some_and(|from| from != row)
+                        {
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(rect.left(), rect.top() - 1.0),
+                                    egui::vec2(rect.width(), 2.0),
+                                ),
+                                0.0,
+                                ui.visuals().selection.stroke.color,
+                            );
+                        }
 
                         // 点击区缩到星标左边：按钮自己吃掉落在它身上的点击，
                         // 否则点「钉住这条」会顺带回放内容。
@@ -1770,7 +1882,21 @@ impl App {
                             rect.min,
                             egui::pos2((pin_rect.left() - 2.0).max(rect.left()), rect.max.y),
                         );
-                        let response = ui.interact(click_rect, response.id, egui::Sense::click());
+                        row_rects.push(rect);
+                        // 手动排序下这一行还能拖：按下记起点，松开时再落位。
+                        let sense = if manual {
+                            egui::Sense::click_and_drag()
+                        } else {
+                            egui::Sense::click()
+                        };
+                        let response = ui.interact(click_rect, response.id, sense);
+                        if manual && response.drag_started() {
+                            self.drag_from = Some(row);
+                            self.selected = row;
+                        }
+                        if manual && hovered && self.drag_from.is_none() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        }
                         if response.double_clicked() && is_note && !editing_this {
                             self.start_note_edit(id);
                         }
@@ -1784,6 +1910,42 @@ impl App {
                         }
                         if scroll_target == Some(row) {
                             response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                    }
+
+                    // 拖到上下边缘时自动滚动：列表比一屏长时，
+                    // 不滚就只能把条目拖到看得见的那几行之间。
+                    if self.drag_from.is_some() {
+                        if let Some(pos) = ui.ctx().pointer_hover_pos() {
+                            let view = ui.clip_rect();
+                            let edge = 24.0;
+                            let delta = if pos.y < view.top() + edge {
+                                -8.0
+                            } else if pos.y > view.bottom() - edge {
+                                8.0
+                            } else {
+                                0.0
+                            };
+                            if delta != 0.0 {
+                                ui.scroll_with_delta(egui::vec2(0.0, delta));
+                            }
+                        }
+                    }
+
+                    // 拖拽落位：指针一松开就把条目挪到指针所在行。
+                    // 判断放在滚动区里做，这样 row_rects 才是本帧的真实坐标。
+                    if self.drag_from.is_some()
+                        && !ui.ctx().input(|i| i.pointer.primary_down())
+                    {
+                        let from_row = self.drag_from.take();
+                        if let (Some(from_row), Some(pos)) =
+                            (from_row, ui.ctx().pointer_hover_pos())
+                        {
+                            if let Some(to_row) = row_rects.iter().position(|r| r.contains(pos)) {
+                                if to_row != from_row && to_row < rows.len() {
+                                    self.drop_entry(rows[from_row].id, rows[to_row].id);
+                                }
+                            }
                         }
                     }
                 });
@@ -1805,17 +1967,22 @@ impl App {
             if let Some(view) = self.entries.iter_mut().find(|e| e.entry.id == id) {
                 view.entry.pinned = pinned;
             }
-            // 与 page() 保持同一套顺序：固定的在前，各自按最近使用倒序。
-            self.entries.sort_by(|a, b| {
-                b.entry
-                    .pinned
-                    .cmp(&a.entry.pinned)
-                    .then(b.seq.cmp(&a.seq))
-            });
-            // 重排后光标跟着同一条走，不然会突然指向别的内容。
-            if let Some(idx) = self.visible().iter().position(|e| e.entry.id == id) {
-                self.selected = idx;
-                self.scroll_to = Some(idx);
+            // 「最近使用」能靠本地重排复现存储层的顺序；其它模式各有各的规则
+            // （创建时间 / 类型 / 手动），重载一页比在 UI 里再写一份排序可靠。
+            if self.sort_mode() == SortMode::Recent {
+                self.entries.sort_by(|a, b| {
+                    b.entry
+                        .pinned
+                        .cmp(&a.entry.pinned)
+                        .then(b.seq.cmp(&a.seq))
+                });
+                // 重排后光标跟着同一条走，不然会突然指向别的内容。
+                if let Some(idx) = self.visible().iter().position(|e| e.entry.id == id) {
+                    self.selected = idx;
+                    self.scroll_to = Some(idx);
+                }
+            } else {
+                self.reload_page();
             }
             let (cmd, _reply) = StoreCommand::set_pinned(id, pinned);
             self.handle.submit(cmd);

@@ -43,7 +43,13 @@ pub enum Msg {
 pub enum WireRequest {
     InsertNote { text: String },
     UpdateNote { id: EntryId, text: String },
-    Page { scope: Scope, cursor: Option<Seq>, limit: usize },
+    Page {
+        scope: Scope,
+        sort: SortMode,
+        cursor: Option<Seq>,
+        limit: usize,
+    },
+    SetManualOrder { ids: Vec<EntryId> },
     Search { scope: Scope, query: String, limit: usize },
     Content { id: EntryId },
     Touch { id: EntryId },
@@ -123,8 +129,13 @@ const WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
     let pair = match req {
-        WireRequest::Page { scope, cursor, limit } => {
-            let (cmd, rx) = StoreCommand::page(scope, cursor, limit);
+        WireRequest::Page {
+            scope,
+            sort,
+            cursor,
+            limit,
+        } => {
+            let (cmd, rx) = StoreCommand::page(scope, sort, cursor, limit);
             let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
                 Ok(Ok(page)) => WireReply::ok(ReplyBody::Page(page)),
                 Ok(Err(e)) => WireReply::err(e),
@@ -136,6 +147,15 @@ pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
             let (cmd, rx) = StoreCommand::search(scope, query, limit);
             let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
                 Ok(Ok(entries)) => WireReply::ok(ReplyBody::Entries(entries)),
+                Ok(Err(e)) => WireReply::err(e),
+                Err(_) => WireReply::err(StoreError::Remote("存储线程超时".into())),
+            });
+            (cmd, waiter)
+        }
+        WireRequest::SetManualOrder { ids } => {
+            let (cmd, rx) = StoreCommand::set_manual_order(ids);
+            let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
+                Ok(Ok(())) => WireReply::ok_empty(),
                 Ok(Err(e)) => WireReply::err(e),
                 Err(_) => WireReply::err(StoreError::Remote("存储线程超时".into())),
             });
@@ -430,8 +450,19 @@ impl Remote {
     /// 把 `StoreCommand` 翻译成 wire 请求。
     pub fn submit(&self, cmd: StoreCommand) -> bool {
         match cmd {
-            StoreCommand::Page { scope, cursor, limit, reply } => self.call(
-                WireRequest::Page { scope, cursor, limit },
+            StoreCommand::Page {
+                scope,
+                sort,
+                cursor,
+                limit,
+                reply,
+            } => self.call(
+                WireRequest::Page {
+                    scope,
+                    sort,
+                    cursor,
+                    limit,
+                },
                 Box::new(move |r| {
                     let _ = reply.send(expect(r, |b| match b {
                         ReplyBody::Page(p) => Some(p),
@@ -462,6 +493,15 @@ impl Remote {
                 Box::new(move |r| {
                     let _ = reply.send(expect(r, |b| match b {
                         ReplyBody::Entry(e) => Some(e),
+                        _ => None,
+                    }));
+                }),
+            ),
+            StoreCommand::SetManualOrder { ids, reply } => self.call(
+                WireRequest::SetManualOrder { ids },
+                Box::new(move |r| {
+                    let _ = reply.send(expect(r, |b| match b {
+                        ReplyBody::None => Some(()),
                         _ => None,
                     }));
                 }),

@@ -73,7 +73,16 @@ pub trait ClipboardStore: Send {
     ///
     /// 实现必须在**同一个读事务**内完成"扫 usage_order + 读 entries"，
     /// 否则中间发生清理会读到指向已删除条目的 seq。
-    fn page(&self, scope: Scope, cursor: Option<Seq>, limit: usize) -> StoreResult<Page>;
+    fn page(
+        &self,
+        scope: Scope,
+        sort: SortMode,
+        cursor: Option<Seq>,
+        limit: usize,
+    ) -> StoreResult<Page>;
+
+    /// 整份手动顺序落盘。只影响 SortMode::Manual 下的展示。
+    fn set_manual_order(&self, ids: &[EntryId]) -> StoreResult<()>;
 
     /// 全量历史搜索，按使用顺序倒序返回。只匹配 `preview`。
     fn search(&self, scope: Scope, query: &str, limit: usize) -> StoreResult<Vec<EntryView>>;
@@ -135,9 +144,14 @@ pub enum StoreCommand {
     },
     Page {
         scope: Scope,
+        sort: SortMode,
         cursor: Option<Seq>,
         limit: usize,
         reply: Sender<StoreResult<Page>>,
+    },
+    SetManualOrder {
+        ids: Vec<EntryId>,
+        reply: Sender<StoreResult<()>>,
     },
     Search {
         scope: Scope,
@@ -193,9 +207,28 @@ impl StoreCommand {
         (StoreCommand::UpdateNote { id, text: text.into(), reply: tx }, rx)
     }
 
-    pub fn page(scope: Scope, cursor: Option<Seq>, limit: usize) -> (Self, Reply<Page>) {
+    pub fn page(
+        scope: Scope,
+        sort: SortMode,
+        cursor: Option<Seq>,
+        limit: usize,
+    ) -> (Self, Reply<Page>) {
         let (tx, rx) = channel();
-        (StoreCommand::Page { scope, cursor, limit, reply: tx }, rx)
+        (
+            StoreCommand::Page {
+                scope,
+                sort,
+                cursor,
+                limit,
+                reply: tx,
+            },
+            rx,
+        )
+    }
+
+    pub fn set_manual_order(ids: Vec<EntryId>) -> (Self, Reply<()>) {
+        let (tx, rx) = channel();
+        (StoreCommand::SetManualOrder { ids, reply: tx }, rx)
     }
 
     pub fn search(scope: Scope, query: impl Into<String>, limit: usize) -> (Self, Reply<Vec<EntryView>>) {

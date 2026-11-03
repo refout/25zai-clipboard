@@ -132,6 +132,13 @@ translations! {
     // 主列表
     "搜索剪贴板历史" => "Search clipboard history",
     "搜索笔记" => "Search notes",
+    "排序" => "Sort",
+    "最近使用" => "Recently used",
+    "最近创建" => "Newest first",
+    "最早创建" => "Oldest first",
+    "按类型" => "By type",
+    "手动排序" => "Manual",
+    "拖动行可调整顺序" => "Drag rows to reorder",
     "历史" => "History",
     "笔记" => "Notes",
     "新建笔记" => "New note",

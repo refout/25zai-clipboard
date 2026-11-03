@@ -89,7 +89,12 @@ pub fn run() -> Result<(), AnyError> {
     if let Err(e) = erwuzai_platform::autostart::set_enabled(config.autostart, &exe) {
         eprintln!("25zai: 设置开机自启失败：{e}");
     }
-    let page = store.page(erwuzai_store::Scope::History, None, 1)?;
+    let page = store.page(
+        erwuzai_store::Scope::History,
+        erwuzai_store::SortMode::Recent,
+        None,
+        1,
+    )?;
     println!("loaded {} entries from {}", page.total_visible, paths.db().display());
 
     let StoreService {

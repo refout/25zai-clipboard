@@ -174,6 +174,46 @@ pub enum Content {
     Note(String),
 }
 
+/// 列表排序方式。历史与笔记两个视图各记一份。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortMode {
+    /// 最近使用倒序，固定条目置顶。默认行为。
+    #[default]
+    Recent,
+    /// 按创建时间倒序。
+    CreatedDesc,
+    /// 按创建时间正序，适合把历史当清单看。
+    CreatedAsc,
+    /// 按类型分组（笔记 / 文本 / 富文本 / 图片 / 文件），组内按最近使用倒序。
+    Kind,
+    /// 用户拖出来的顺序。固定条目**不**置顶。
+    Manual,
+}
+
+impl SortMode {
+    /// 下拉里的全部选项，顺序即展示顺序。
+    pub const ALL: [Self; 5] = [
+        Self::Recent,
+        Self::CreatedDesc,
+        Self::CreatedAsc,
+        Self::Kind,
+        Self::Manual,
+    ];
+
+    /// 下拉里显示的名字。
+    pub fn label(self) -> &'static str {
+        use erwuzai_core::i18n::tr;
+        match self {
+            Self::Recent => tr("最近使用"),
+            Self::CreatedDesc => tr("最近创建"),
+            Self::CreatedAsc => tr("最早创建"),
+            Self::Kind => tr("按类型"),
+            Self::Manual => tr("手动排序"),
+        }
+    }
+}
+
 /// 列表查询的范围。笔记与剪贴板条目在 UI 上是两个 tab，集合互斥。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -281,6 +321,10 @@ pub struct Config {
     /// 单条文本 / 路径列表上限，超出截断并标记 `truncated`。
     pub max_text_bytes: usize,
     pub hotkey: String,
+    /// 历史列表的排序方式。
+    pub sort: SortMode,
+    /// 笔记列表的排序方式。
+    pub note_sort: SortMode,
     /// 唤起「笔记」tab 的第二个全局热键。
     ///
     /// 和 `hotkey` 一样归守护进程所有，改键要经过 IPC。
@@ -317,6 +361,8 @@ impl Default for Config {
             paste_on_click: true,
             max_text_bytes: 1024 * 1024,
             hotkey: "Alt+V".to_string(),
+            sort: SortMode::Recent,
+            note_sort: SortMode::Recent,
             note_hotkey: "Alt+N".to_string(),
             autostart: true,
             tray_icon: None,
