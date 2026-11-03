@@ -137,7 +137,7 @@ crates/
    （clipboard-rs / global-hotkey / tray-icon）都挡在边界外。
 
 完整设计见 [docs/DESIGN.md](docs/DESIGN.md)：数据模型、生命周期、回声抑制、
-平台矩阵、性能预算、踩过的坑都在里面。
+平台矩阵、性能预算、踩过的坑都在里面。后续计划见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## 开发
 
