@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>25仔（25zai）— 本地优先的剪贴板历史管理器</title>
+<meta name="description" content="25仔是一款用 Rust + egui 写的轻量剪贴板历史工具：常驻托盘，Alt+V 唤起，点击即粘贴，数据全部留在本机。">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>25仔（25zai）</h1>
+  <p class="tagline">轻量剪贴板历史，数据只留在本机。</p>
+
+  <nav>
+    <a href="privacy.html">隐私政策</a>
+    <a href="https://github.com/refout/25zai-clipboard">GitHub</a>
+    <a href="https://github.com/refout/25zai-clipboard/releases/latest">下载</a>
+  </nav>
+
+  <p>一个用 Rust + egui 写的轻量剪贴板历史工具：常驻托盘，<code>Alt+V</code> 唤起，点击即粘贴。
+  没有 Electron，没有后台云同步，数据全部留在本地的一个 redb 文件里。</p>
+
+  <div class="card">
+    <strong>下载</strong>
+    <ul>
+      <li><a href="https://github.com/refout/25zai-clipboard/releases/latest">GitHub Releases</a>（绿色版 zip / 安装包 exe / 商店包 msix）</li>
+      <li>命令行：<code>winget install Refout.25zai</code></li>
+      <li>Microsoft Store：审核中</li>
+    </ul>
+  </div>
+
+  <h2>功能</h2>
+  <ul>
+    <li><strong>文本 / 图片 / 文件列表</strong>采集，BLAKE3 连续去重</li>
+    <li><strong>全局快捷键</strong>唤起（默认 <code>Alt+V</code>，可在设置里改键，支持按键捕获录键）</li>
+    <li><strong>点条目直接粘贴</strong>回原来的窗口；钉住窗口后可连续粘多条</li>
+    <li><strong>实时搜索</strong>：内存索引先行，命中不足时再走存储层全量搜索</li>
+    <li><strong>固定条目</strong>：钉住的历史不会被容量上限和时间清理删掉</li>
+    <li><strong>图片缩略图</strong>：按需解码、按条目缓存</li>
+    <li><strong>明暗主题</strong>：跟随系统 / 强制明 / 强制暗，主题色可调，字号可缩放</li>
+    <li><strong>多语言</strong>：简体中文 / English，可跟随系统区域</li>
+    <li><strong>开机自启</strong>：设置页一键开关，登录后台常驻不弹窗</li>
+    <li><strong>敏感内容跳过</strong>：形似密钥的内容默认不落盘</li>
+    <li><strong>单实例</strong>：第二次启动会把已有实例唤到前台，然后自己退出</li>
+  </ul>
+
+  <h2>隐私</h2>
+  <p>不联网、不收集、不上传。剪贴板内容只写在本机的一个本地数据库文件里，
+  没有任何遥测、账号或云同步。详见<a href="privacy.html">隐私政策</a>。</p>
+
+  <h2>平台</h2>
+  <p>Windows 11 已实测；macOS / Linux 代码路径存在但未验证。</p>
+
+  <footer>
+    <p>MIT License · <a href="https://github.com/refout/25zai-clipboard">refout/25zai-clipboard</a></p>
+    <p class="en">A featherweight, local-first clipboard history manager for Windows. No telemetry, no cloud sync — everything stays on your machine.</p>
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私政策 — 25仔（25zai）</title>
+<meta name="description" content="25仔（25zai）隐私政策：不收集、不上传，剪贴板数据只保存在本机。">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>隐私政策</h1>
+  <p class="tagline">25仔（25zai）· 生效日期：2026-11-03</p>
+
+  <nav>
+    <a href="index.html">返回首页</a>
+    <a href="#en">English</a>
+  </nav>
+
+  <div class="card">
+    <strong>一句话总结：25仔不收集任何数据，不联网，不上传。</strong>
+    剪贴板内容只写入你自己电脑上的一个本地数据库文件，我们看不到、也拿不到。
+  </div>
+
+  <h2>1. 我们收集哪些信息</h2>
+  <p><strong>不收集任何信息。</strong>没有账号体系，没有统计埋点，没有崩溃上报，
+  没有广告 SDK，也没有任何第三方分析工具。</p>
+
+  <h2>2. 剪贴板数据</h2>
+  <p>当你复制文本、图片或文件列表时，25仔会把它们写入本机的一个本地数据库（redb 格式）：</p>
+  <ul>
+    <li>便携版 / 安装版：<code>%APPDATA%\25zai</code></li>
+    <li>Microsoft Store 版：<code>%LOCALAPPDATA%\Packages\&lt;包族名&gt;\LocalCache\Roaming\25zai</code></li>
+  </ul>
+  <p>这些数据<strong>不会离开你的设备</strong>。25仔不提供云同步，也没有任何上传通道。</p>
+
+  <h2>3. 网络访问</h2>
+  <p>25仔唯一的网络行为是<strong>本机回环通信</strong>：界面进程与后台守护进程通过
+  <code>127.0.0.1</code> 上的临时端口交换数据（复制事件、搜索结果等）。
+  该连接不经过任何外部服务器，也不会访问互联网。</p>
+  <p>程序内不包含任何自动更新、遥测或远程配置请求。</p>
+
+  <h2>4. 敏感内容</h2>
+  <p>形似密钥、令牌的内容（例如私钥块、JWT）默认<strong>不会写入数据库</strong>，
+  以避免密码类内容被意外留存。该行为可在设置中调整。</p>
+
+  <h2>5. 第三方</h2>
+  <p>没有第三方服务、SDK 或数据共享方。若你通过 Microsoft Store 或 winget 安装，
+  下载与结算由 Microsoft 处理，适用其各自的隐私政策。</p>
+
+  <h2>6. 删除你的数据</h2>
+  <ul>
+    <li>在设置页清空历史记录；</li>
+    <li>或直接删除上面的数据目录；</li>
+    <li>卸载程序不会自动删除历史文件，需要手动删除目录。</li>
+  </ul>
+
+  <h2>7. 儿童</h2>
+  <p>本程序不面向儿童设计，也不收集任何人的个人信息。</p>
+
+  <h2>8. 政策变更</h2>
+  <p>若本政策有变更，会更新本页面并修改上方生效日期。</p>
+
+  <h2>9. 联系方式</h2>
+  <p>有任何疑问请开 issue：
+  <a href="https://github.com/refout/25zai-clipboard/issues">github.com/refout/25zai-clipboard/issues</a></p>
+
+  <h2 id="en">Privacy Policy (English)</h2>
+  <p class="en"><strong>Summary: 25zai collects nothing, connects to nothing, and uploads nothing.</strong></p>
+  <p class="en">25zai is a local-first clipboard history manager. Clipboard items (text, images, file
+  lists) are written to a local redb database under <code>%APPDATA%\25zai</code>
+  (or the MSIX-redirected <code>%LOCALAPPDATA%\Packages\&lt;PackageFamilyName&gt;\LocalCache\Roaming\25zai</code>).
+  This data never leaves your device.</p>
+  <p class="en">The only network activity is loopback IPC between the UI process and the background
+  daemon over <code>127.0.0.1</code>. There is no telemetry, no analytics, no crash reporting,
+  no advertising SDK, no account system, and no cloud sync.</p>
+  <p class="en">Content that looks like a secret (private key blocks, JWTs) is skipped by default and
+  not persisted. You can delete all data from the settings page or by removing the data directory.
+  For questions, open an issue at
+  <a href="https://github.com/refout/25zai-clipboard/issues">github.com/refout/25zai-clipboard/issues</a>.</p>
+
+  <footer>
+    <p>MIT License · <a href="https://github.com/refout/25zai-clipboard">refout/25zai-clipboard</a></p>
+  </footer>
+</main>
+</body>
+</html>
