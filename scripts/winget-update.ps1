@@ -134,6 +134,8 @@ if ($Submit) {
   $stage = Join-Path $env:TEMP ("winget-submit-" + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   Get-ChildItem $dir -Filter *.yaml | Copy-Item -Destination $stage
+  Write-Host ("提交目录: " + $stage)
+  Get-ChildItem $stage | ForEach-Object { Write-Host ("  " + $_.Name + " (" + $_.Length + "B)") }
   if (-not (Get-Command wingetcreate -ErrorAction SilentlyContinue)) {
     Write-Host '安装 wingetcreate...'
     Invoke-WebRequest 'https://aka.ms/wingetcreate/latest' -OutFile "$env:TEMP/wingetcreate.exe" -UseBasicParsing
