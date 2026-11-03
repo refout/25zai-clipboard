@@ -69,5 +69,6 @@ MSIX 跟 exe 一起随 Release 发布，不用单独跑流水线：
 
 ## 已知取舍
 
-- 清单里 `DisplayName` 用了中文「25仔」，靠数字实体过 MakeAppx。
+- 清单里 `DisplayName` 用 ASCII 的 `25zai`（中文名会让 MakeAppx 报本地化的 XML 错误，
+  `pack.ps1` 虽然会自动转数字实体，但显示名没必要冒这个险）。
 - 若以后要做多语言显示名，建议改用 `ms-resource:` + PRI 资源，而不是往清单塞中文。

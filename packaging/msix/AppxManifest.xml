@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  25仔 的 MSIX 清单模板（全信任 Win32）。
+  25zai 的 MSIX 清单模板（全信任 Win32）。
   提交前由 .github/workflows/store.yml 把下面四个占位符替换掉：
     {{IDENTITY_NAME}}          Partner Center 里的“包名称”，如 2169HaleWang.25zai
     {{PUBLISHER}}              Partner Center 里的 Publisher，如 CN=0D4B9868-...
@@ -25,7 +25,7 @@
     ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>25仔</DisplayName>
+    <DisplayName>25zai</DisplayName>
     <PublisherDisplayName>{{PUBLISHER_DISPLAY_NAME}}</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -45,7 +45,7 @@
       Executable="25zai.exe"
       EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="25仔"
+        DisplayName="25zai"
         Description="本地剪贴板历史管理器"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
@@ -59,7 +59,7 @@
           Category="windows.startupTask"
           Executable="25zai.exe"
           EntryPoint="Windows.FullTrustApplication">
-          <desktop:StartupTask TaskId="25zaiDaemon" Enabled="false" DisplayName="25仔" />
+          <desktop:StartupTask TaskId="25zaiDaemon" Enabled="false" DisplayName="25zai" />
         </desktop:Extension>
       </Extensions>
     </Application>
