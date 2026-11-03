@@ -6,21 +6,32 @@ Win32 程序上架 Store 只能走 MSIX（全信任打包）。`pack.ps1` 把
 ## 先准备
 
 仓库变量（Settings → Secrets and variables → Actions → Variables）已填好，
-只有 `MSIX_PUBLISHER` 是占位值，必须换成 Partner Center 里的真实值：
+对应 Partner Center → 产品管理 → 产品标识：
 
 | 变量 | 当前值 | 说明 |
 |---|---|---|
-| `MSIX_IDENTITY_NAME` | `Refout.25zai` | 保留应用名时自己起的「包名称」，须与 Partner Center 完全一致 |
-| `MSIX_PUBLISHER` | `CN=00000000-...`（占位） | Partner Center → 产品管理 → 产品标识 → Publisher，形如 `CN=1a2b3c4d-...` |
-| `MSIX_PUBLISHER_DISPLAY_NAME` | `refout` | 商店页显示的发布者名称 |
+| `MSIX_IDENTITY_NAME` | `2169HaleWang.25zai` | Package/Identity/Name。前缀 `2169HaleWang` 是账号级命名空间，预留时就冻结，改不了 |
+| `MSIX_PUBLISHER` | `CN=0D4B9868-...` | Package/Identity/Publisher |
+| `MSIX_PUBLISHER_DISPLAY_NAME` | `refout` | Package/Properties/PublisherDisplayName，商店页显示的发布者 |
 
-`store` 工作流会拒绝占位值，避免打出一个 Publisher 不匹配、上传必被拒的包。 |
+注意 Identity Name **不是** `refout.25zai`：前缀跟发布者显示名称无关，填错会被拒包。
+`store` 工作流会拒绝占位值，避免打出一个 Publisher 不匹配、上传必被拒的包。
+
+产品标识全貌（用于核对，PFN / Store ID 不进清单）：
+
+```
+Package/Identity/Name                2169HaleWang.25zai
+Package/Identity/Publisher           CN=0D4B9868-9F65-4FEB-980D-79CCAE83C901
+Package/Properties/PublisherDisplayName  refout
+Package Family Name (PFN)            2169HaleWang.25zai_ytvrv8s2wkq3e
+Store ID                             9PBMHLXLWF4T
+```
 
 ## 本地打包
 
 ```powershell
 cargo build --release -p erwuzai-ui
-./packaging/msix/pack.ps1 -IdentityName Refout.25zai -Publisher 'CN=1A2B...' -PublisherDisplayName refout -Version 0.1.2
+./packaging/msix/pack.ps1 -IdentityName 2169HaleWang.25zai -Publisher 'CN=0D4B9868-9F65-4FEB-980D-79CCAE83C901' -PublisherDisplayName refout -Version 0.1.2
 ```
 
 产物在 `dist/25zai-<版本>-windows-x64.msix`。CI 里 `store.yml` 会顺手用自签证书

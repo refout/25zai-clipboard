@@ -1,7 +1,7 @@
 ﻿<#
   把 target/release/25zai.exe 打成 MSIX（全信任 Win32）。
   用法（参数放一行或分行，PowerShell 不需要续行符）:
-    ./packaging/msix/pack.ps1 -IdentityName Refout.25zai -Publisher 'CN=XXXX' -PublisherDisplayName refout -Version 0.1.2
+    ./packaging/msix/pack.ps1 -IdentityName 2169HaleWang.25zai -Publisher 'CN=0D4B9868-9F65-4FEB-980D-79CCAE83C901' -PublisherDisplayName refout -Version 0.1.2
 
   两个坑（MakeAppx 的报错是本地化的，经常只显示问号）:
   1. 清单里的中文必须转成数字实体，否则 MakeAppx 直接判 XML 无效。

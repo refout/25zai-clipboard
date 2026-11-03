@@ -2,8 +2,8 @@
 <!--
   25仔 的 MSIX 清单模板（全信任 Win32）。
   提交前由 .github/workflows/store.yml 把下面四个占位符替换掉：
-    {{IDENTITY_NAME}}          Partner Center 里的“包名称”，如 Refout.25zai
-    {{PUBLISHER}}              Partner Center 里的 Publisher，如 CN=1A2B...
+    {{IDENTITY_NAME}}          Partner Center 里的“包名称”，如 2169HaleWang.25zai
+    {{PUBLISHER}}              Partner Center 里的 Publisher，如 CN=0D4B9868-...
     {{PUBLISHER_DISPLAY_NAME}} 显示名，如 refout
     {{VERSION}}                四段版本号，如 0.1.2.0
 
