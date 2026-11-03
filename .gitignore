@@ -14,3 +14,6 @@ Thumbs.db
 # 本地数据（便携模式会用 $env:25ZAI_DATA_DIR 指到别处）
 *.db
 blobs/
+
+# 打包产物
+dist/

@@ -43,6 +43,15 @@
 
 exe 目前**没有代码签名**，首次运行 SmartScreen 会拦一下，点「更多信息 → 仍要运行」即可。
 
+## 其他安装方式
+
+- **winget**：清单在 `packaging/winget/`，合并进 winget-pkgs 后可用
+  `winget install Refout.25zai`。发版后用
+  `./scripts/winget-update.ps1 -Version <x.y.z> -Submit` 更新。
+- **Microsoft Store**：MSIX 打包脚本在 `packaging/msix/`，`store` 工作流产出
+  `.msix` 后上传 Partner Center。Store 版的开机自启走清单里的
+  `desktop:StartupTask`（WinRT），不走注册表——MSIX 里注册表会被虚拟化。
+
 ## 从源码构建
 
 需要 Rust 1.89+（edition 2021）。

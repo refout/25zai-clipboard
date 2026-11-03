@@ -1,0 +1,35 @@
+name: winget
+
+# release 发布后自动把新版本提交到 microsoft/winget-pkgs。
+# 需要仓库 secret WINGET_TOKEN（GitHub PAT，带 public_repo）；没配就跳过。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "要提交的版本（不带 v，例如 0.1.2）"
+        required: true
+
+jobs:
+  submit:
+    runs-on: windows-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+      EVENT_TAG: ${{ github.event.release.tag_name }}
+      INPUT_VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 提交 winget 清单
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        run: |
+          $v = if ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { $env:EVENT_TAG -replace '^v', '' }
+          if (-not $v) { throw "拿不到版本号" }
+          ./scripts/winget-update.ps1 -Version $v -Submit -Token $env:WINGET_TOKEN
+
+      - name: 未配置 WINGET_TOKEN
+        if: env.WINGET_TOKEN == ''
+        shell: pwsh
+        run: Write-Host "跳过：仓库没有配置 WINGET_TOKEN secret"

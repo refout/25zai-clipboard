@@ -48,6 +48,8 @@ pub enum PlatformError {
     Malformed(String),
     #[error("托盘：{0}")]
     Tray(String),
+    #[error("开机自启：{0}")]
+    Autostart(String),
     #[error("io：{0}")]
     Io(#[from] std::io::Error),
 }
