@@ -56,14 +56,27 @@ pub trait ClipboardStore: Send {
     /// 去重命中时**不**重写 `entries` / `texts`，只换 seq。
     fn capture(&self, item: CapturedItem) -> StoreResult<CaptureOutcome>;
 
+    /// 新建一条笔记。
+    ///
+    /// 与 `capture` 的区别：不做 BLAKE3 去重、不做敏感内容过滤（用户主动
+    /// 输入的就是要保存），固定条目、不占 `limit` 配额、不被时间清理删掉。
+    ///
+    /// 返回 `None` 表示内容为空或超硬上限，调用方忽略即可。
+    fn insert_note(&self, text: &str) -> StoreResult<Option<EntryView>>;
+
+    /// 改写一条笔记的正文。`seq` 不变，位置不跳动。
+    ///
+    /// 非笔记条目返回 `None`（不提供改剪贴板内容的入口）。
+    fn update_note(&self, id: EntryId, text: &str) -> StoreResult<Option<EntryView>>;
+
     /// 按使用顺序倒序取一页。`cursor == None` 取首屏。
     ///
     /// 实现必须在**同一个读事务**内完成"扫 usage_order + 读 entries"，
     /// 否则中间发生清理会读到指向已删除条目的 seq。
-    fn page(&self, cursor: Option<Seq>, limit: usize) -> StoreResult<Page>;
+    fn page(&self, scope: Scope, cursor: Option<Seq>, limit: usize) -> StoreResult<Page>;
 
     /// 全量历史搜索，按使用顺序倒序返回。只匹配 `preview`。
-    fn search(&self, query: &str, limit: usize) -> StoreResult<Vec<EntryView>>;
+    fn search(&self, scope: Scope, query: &str, limit: usize) -> StoreResult<Vec<EntryView>>;
 
     /// 回放用：读出完整内容。
     fn get_content(&self, id: EntryId) -> StoreResult<Option<Content>>;
@@ -111,12 +124,23 @@ pub enum StoreCommand {
         item: CapturedItem,
         reply: Sender<StoreResult<CaptureOutcome>>,
     },
+    InsertNote {
+        text: String,
+        reply: Sender<StoreResult<Option<EntryView>>>,
+    },
+    UpdateNote {
+        id: EntryId,
+        text: String,
+        reply: Sender<StoreResult<Option<EntryView>>>,
+    },
     Page {
+        scope: Scope,
         cursor: Option<Seq>,
         limit: usize,
         reply: Sender<StoreResult<Page>>,
     },
     Search {
+        scope: Scope,
         query: String,
         limit: usize,
         reply: Sender<StoreResult<Vec<EntryView>>>,
@@ -159,14 +183,24 @@ impl StoreCommand {
         (StoreCommand::Capture { item, reply: tx }, rx)
     }
 
-    pub fn page(cursor: Option<Seq>, limit: usize) -> (Self, Reply<Page>) {
+    pub fn insert_note(text: impl Into<String>) -> (Self, Reply<Option<EntryView>>) {
         let (tx, rx) = channel();
-        (StoreCommand::Page { cursor, limit, reply: tx }, rx)
+        (StoreCommand::InsertNote { text: text.into(), reply: tx }, rx)
     }
 
-    pub fn search(query: impl Into<String>, limit: usize) -> (Self, Reply<Vec<EntryView>>) {
+    pub fn update_note(id: EntryId, text: impl Into<String>) -> (Self, Reply<Option<EntryView>>) {
         let (tx, rx) = channel();
-        (StoreCommand::Search { query: query.into(), limit, reply: tx }, rx)
+        (StoreCommand::UpdateNote { id, text: text.into(), reply: tx }, rx)
+    }
+
+    pub fn page(scope: Scope, cursor: Option<Seq>, limit: usize) -> (Self, Reply<Page>) {
+        let (tx, rx) = channel();
+        (StoreCommand::Page { scope, cursor, limit, reply: tx }, rx)
+    }
+
+    pub fn search(scope: Scope, query: impl Into<String>, limit: usize) -> (Self, Reply<Vec<EntryView>>) {
+        let (tx, rx) = channel();
+        (StoreCommand::Search { scope, query: query.into(), limit, reply: tx }, rx)
     }
 
     pub fn content(id: EntryId) -> (Self, Reply<Option<Content>>) {
@@ -274,6 +308,14 @@ impl StoreHandle {
     pub fn set_hotkey(&self, spec: &str) -> std::result::Result<(), String> {
         match &self.remote {
             Some(remote) => remote.set_hotkey(spec),
+            None => Err("本地模式不支持改键".into()),
+        }
+    }
+
+    /// 改「新建笔记」的全局快捷键。
+    pub fn set_note_hotkey(&self, spec: &str) -> std::result::Result<(), String> {
+        match &self.remote {
+            Some(remote) => remote.set_note_hotkey(spec),
             None => Err("本地模式不支持改键".into()),
         }
     }

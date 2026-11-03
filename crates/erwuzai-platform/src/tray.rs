@@ -16,6 +16,7 @@ use crate::{PlatformError, PlatformResult};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     Show,
+    NewNote,
     Settings,
     Quit,
 }
@@ -24,6 +25,7 @@ pub struct SystemTray {
     /// 必须持有：drop 掉托盘图标就从任务栏消失了。
     _icon: TrayIcon,
     show_id: muda::MenuId,
+    note_id: muda::MenuId,
     settings_id: muda::MenuId,
     quit_id: muda::MenuId,
 }
@@ -33,11 +35,13 @@ impl SystemTray {
     pub fn new(tooltip: &str, icon_path: Option<&Path>) -> PlatformResult<Self> {
         let menu = Menu::new();
         let show = MenuItem::new(tr("显示历史"), true, None);
+        let note = MenuItem::new(tr("新建笔记"), true, None);
         let settings = MenuItem::new(tr("设置"), true, None);
         let quit = MenuItem::new(tr("退出 25仔"), true, None);
         let separator = PredefinedMenuItem::separator();
 
         menu.append(&show).map_err(to_err)?;
+        menu.append(&note).map_err(to_err)?;
         menu.append(&settings).map_err(to_err)?;
         menu.append(&separator).map_err(to_err)?;
         menu.append(&quit).map_err(to_err)?;
@@ -52,6 +56,7 @@ impl SystemTray {
         Ok(Self {
             _icon: icon,
             show_id: show.id().clone(),
+            note_id: note.id().clone(),
             settings_id: settings.id().clone(),
             quit_id: quit.id().clone(),
         })
@@ -70,6 +75,9 @@ impl SystemTray {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.show_id {
                 return Some(TrayEvent::Show);
+            }
+            if event.id == self.note_id {
+                return Some(TrayEvent::NewNote);
             }
             if event.id == self.settings_id {
                 return Some(TrayEvent::Settings);

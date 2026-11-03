@@ -24,6 +24,8 @@ use crate::types::*;
 pub enum UiRequest {
     Show,
     ShowSettings,
+    /// 唤起并切到「笔记」tab，光标落在输入框。
+    ShowNotes,
     Quit,
 }
 
@@ -39,8 +41,10 @@ pub enum Msg {
 /// 不带回执通道的请求体（`StoreCommand` 里的 `Sender` 过不了线）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WireRequest {
-    Page { cursor: Option<Seq>, limit: usize },
-    Search { query: String, limit: usize },
+    InsertNote { text: String },
+    UpdateNote { id: EntryId, text: String },
+    Page { scope: Scope, cursor: Option<Seq>, limit: usize },
+    Search { scope: Scope, query: String, limit: usize },
     Content { id: EntryId },
     Touch { id: EntryId },
     SetPinned { id: EntryId, pinned: bool },
@@ -53,6 +57,8 @@ pub enum WireRequest {
     ArmEcho { hash: Option<ContentHash> },
     /// 改全局快捷键。热键归守护进程所有，UI 只能请求。
     SetHotkey { spec: String },
+    /// 改「新建笔记」的全局快捷键。
+    SetNoteHotkey { spec: String },
     /// 托盘右键是 Win32 原生菜单，只认进程级标记——UI 换了主题就通知守护进程。
     SetMenuDark { dark: bool },
     /// 开发用：直接塞一条文本进历史（`25zai --seed`）。
@@ -66,6 +72,8 @@ pub enum ReplyBody {
     None,
     Page(Page),
     Entries(Vec<EntryView>),
+    /// 单条（新建 / 编辑笔记）。
+    Entry(Option<EntryView>),
     Content(Option<Content>),
     Touched(TouchOutcome),
     Ids(Vec<EntryId>),
@@ -115,8 +123,8 @@ const WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
     let pair = match req {
-        WireRequest::Page { cursor, limit } => {
-            let (cmd, rx) = StoreCommand::page(cursor, limit);
+        WireRequest::Page { scope, cursor, limit } => {
+            let (cmd, rx) = StoreCommand::page(scope, cursor, limit);
             let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
                 Ok(Ok(page)) => WireReply::ok(ReplyBody::Page(page)),
                 Ok(Err(e)) => WireReply::err(e),
@@ -124,8 +132,8 @@ pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
             });
             (cmd, waiter)
         }
-        WireRequest::Search { query, limit } => {
-            let (cmd, rx) = StoreCommand::search(query, limit);
+        WireRequest::Search { scope, query, limit } => {
+            let (cmd, rx) = StoreCommand::search(scope, query, limit);
             let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
                 Ok(Ok(entries)) => WireReply::ok(ReplyBody::Entries(entries)),
                 Ok(Err(e)) => WireReply::err(e),
@@ -137,6 +145,24 @@ pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
             let (cmd, rx) = StoreCommand::content(id);
             let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
                 Ok(Ok(content)) => WireReply::ok(ReplyBody::Content(content)),
+                Ok(Err(e)) => WireReply::err(e),
+                Err(_) => WireReply::err(StoreError::Remote("存储线程超时".into())),
+            });
+            (cmd, waiter)
+        }
+        WireRequest::InsertNote { text } => {
+            let (cmd, rx) = StoreCommand::insert_note(text);
+            let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
+                Ok(Ok(entry)) => WireReply::ok(ReplyBody::Entry(entry)),
+                Ok(Err(e)) => WireReply::err(e),
+                Err(_) => WireReply::err(StoreError::Remote("存储线程超时".into())),
+            });
+            (cmd, waiter)
+        }
+        WireRequest::UpdateNote { id, text } => {
+            let (cmd, rx) = StoreCommand::update_note(id, text);
+            let waiter: ReplyWaiter = Box::new(move || match rx.recv_timeout(WAIT) {
+                Ok(Ok(entry)) => WireReply::ok(ReplyBody::Entry(entry)),
                 Ok(Err(e)) => WireReply::err(e),
                 Err(_) => WireReply::err(StoreError::Remote("存储线程超时".into())),
             });
@@ -220,6 +246,7 @@ pub fn to_command(req: WireRequest) -> Option<(StoreCommand, ReplyWaiter)> {
         }
         WireRequest::ArmEcho { .. }
         | WireRequest::SetHotkey { .. }
+        | WireRequest::SetNoteHotkey { .. }
         | WireRequest::SetMenuDark { .. }
         | WireRequest::Quit => return None,
     };
@@ -322,11 +349,23 @@ impl Remote {
 
     /// 改全局快捷键，同步等结果。热键归守护进程，UI 只能请求。
     pub fn set_hotkey(&self, spec: &str) -> std::result::Result<(), String> {
+        self.change_hotkey(WireRequest::SetHotkey {
+            spec: spec.to_string(),
+        })
+    }
+
+    /// 改「新建笔记」的全局快捷键。
+    pub fn set_note_hotkey(&self, spec: &str) -> std::result::Result<(), String> {
+        self.change_hotkey(WireRequest::SetNoteHotkey {
+            spec: spec.to_string(),
+        })
+    }
+
+    /// 两个热键的改键请求走同一条路：热键在守护进程手里，这里同步等结果。
+    fn change_hotkey(&self, req: WireRequest) -> std::result::Result<(), String> {
         let (tx, rx) = channel();
         let ok = self.call(
-            WireRequest::SetHotkey {
-                spec: spec.to_string(),
-            },
+            req,
             Box::new(move |r| {
                 let _ = tx.send(match (r.error, r.body) {
                     (Some(e), _) => Err(e),
@@ -391,8 +430,8 @@ impl Remote {
     /// 把 `StoreCommand` 翻译成 wire 请求。
     pub fn submit(&self, cmd: StoreCommand) -> bool {
         match cmd {
-            StoreCommand::Page { cursor, limit, reply } => self.call(
-                WireRequest::Page { cursor, limit },
+            StoreCommand::Page { scope, cursor, limit, reply } => self.call(
+                WireRequest::Page { scope, cursor, limit },
                 Box::new(move |r| {
                     let _ = reply.send(expect(r, |b| match b {
                         ReplyBody::Page(p) => Some(p),
@@ -400,11 +439,29 @@ impl Remote {
                     }));
                 }),
             ),
-            StoreCommand::Search { query, limit, reply } => self.call(
-                WireRequest::Search { query, limit },
+            StoreCommand::Search { scope, query, limit, reply } => self.call(
+                WireRequest::Search { scope, query, limit },
                 Box::new(move |r| {
                     let _ = reply.send(expect(r, |b| match b {
                         ReplyBody::Entries(e) => Some(e),
+                        _ => None,
+                    }));
+                }),
+            ),
+            StoreCommand::InsertNote { text, reply } => self.call(
+                WireRequest::InsertNote { text },
+                Box::new(move |r| {
+                    let _ = reply.send(expect(r, |b| match b {
+                        ReplyBody::Entry(e) => Some(e),
+                        _ => None,
+                    }));
+                }),
+            ),
+            StoreCommand::UpdateNote { id, text, reply } => self.call(
+                WireRequest::UpdateNote { id, text },
+                Box::new(move |r| {
+                    let _ = reply.send(expect(r, |b| match b {
+                        ReplyBody::Entry(e) => Some(e),
                         _ => None,
                     }));
                 }),
@@ -516,6 +573,7 @@ mod tests {
         let msg = Msg::Req {
             id: 7,
             body: WireRequest::Search {
+                scope: Scope::History,
                 query: "你好".into(),
                 limit: 20,
             },
@@ -524,13 +582,39 @@ mod tests {
         assert!(!line.contains('\n'));
         let back: Msg = serde_json::from_str(&line).unwrap();
         match back {
-            Msg::Req { id, body: WireRequest::Search { query, limit } } => {
+            Msg::Req { id, body: WireRequest::Search { scope, query, limit } } => {
+                assert_eq!(scope, Scope::History);
                 assert_eq!(id, 7);
                 assert_eq!(query, "你好");
                 assert_eq!(limit, 20);
             }
             _ => panic!("解析结果不对"),
         }
+    }
+
+    #[test]
+    fn note_requests_survive_the_wire() {
+        let msg = Msg::Req {
+            id: 3,
+            body: WireRequest::InsertNote {
+                text: "灵感".into(),
+            },
+        };
+        let line = serde_json::to_string(&msg).unwrap();
+        match serde_json::from_str::<Msg>(&line).unwrap() {
+            Msg::Req {
+                body: WireRequest::InsertNote { text },
+                ..
+            } => assert_eq!(text, "灵感"),
+            _ => panic!("笔记请求没解析出来"),
+        }
+
+        // 唤起指令也要能过线：守护进程靠它让 UI 直接落在笔记 tab。
+        let line = serde_json::to_string(&Msg::Ui(UiRequest::ShowNotes)).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Msg>(&line).unwrap(),
+            Msg::Ui(UiRequest::ShowNotes)
+        ));
     }
 
     #[test]

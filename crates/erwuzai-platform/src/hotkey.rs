@@ -109,6 +109,10 @@ impl fmt::Display for HotkeySpec {
 /// 注意：**不加 `Send + Sync`**。全局热键管理器在 Windows 上必须和消息循环
 /// 同线程创建（`GlobalHotKeyManager` 内部持有 `*mut c_void`），
 /// 强行加约束会让实现无法存在。这个 trait 只允许在 UI 主线程上使用。
+/// 热键槽位。守护进程同时注册两个：主列表（Alt+V）与新建笔记（Alt+N）。
+pub const SLOT_MAIN: usize = 0;
+pub const SLOT_NOTE: usize = 1;
+
 pub trait HotkeyBackend {
     /// 注册失败必须上报，不能静默失效——用户需要知道快捷键被占了。
     fn register(&self, spec: &HotkeySpec) -> PlatformResult<()>;

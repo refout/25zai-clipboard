@@ -21,7 +21,7 @@ pub mod window;
 
 pub use clipboard::{ClipboardBackend, RawClipboard, Watcher};
 pub use echo::EchoGuard;
-pub use hotkey::{HotkeyBackend, HotkeySpec, Modifiers};
+pub use hotkey::{HotkeyBackend, HotkeySpec, Modifiers, SLOT_MAIN, SLOT_NOTE};
 pub use input::{foreground_is_ours, foreground_window, paste_into};
 pub use menu::set_menu_dark_mode;
 pub use source::{NoSourceApp, SourceAppResolver};

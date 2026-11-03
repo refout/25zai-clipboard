@@ -39,6 +39,8 @@ enum StoredBody {
         width: u32,
         height: u32,
     },
+    /// 用户手写的笔记正文。
+    Note(String),
 }
 
 struct Prepared {
@@ -399,45 +401,166 @@ impl ClipboardStore for RedbStore {
         Ok(outcome)
     }
 
-    fn page(&self, cursor: Option<Seq>, limit: usize) -> StoreResult<Page> {
+    fn insert_note(&self, text: &str) -> StoreResult<Option<EntryView>> {
+        if text.trim().is_empty() || text.len() > HARD_MAX_BYTES {
+            return Ok(None);
+        }
+        let cfg = self.config()?;
+        let (stored, truncated) = truncate_bytes(text, cfg.max_text_bytes);
+        let preview = preview_of(stored);
+        let body = StoredBody::Note(stored.to_string());
+
+        let w = self.db.begin_write()?;
+        let view;
+        {
+            let mut entries = w.open_table(ENTRIES)?;
+            let mut texts = w.open_table(TEXTS)?;
+            let mut content_index = w.open_table(CONTENT_INDEX)?;
+            let mut usage = w.open_table(USAGE_ORDER)?;
+            let mut seq_index = w.open_table(SEQ_INDEX)?;
+            let mut pinned_index = w.open_table(PINNED)?;
+            let mut meta = w.open_table(META)?;
+
+            let now = self.next_timestamp(&mut meta, now_ms())?;
+            let id = meta_get(&meta, meta_key::NEXT_ENTRY_ID)?;
+            meta_set(&mut meta, meta_key::NEXT_ENTRY_ID, id + 1)?;
+            let seq = meta_get(&meta, meta_key::NEXT_SEQ)?;
+            meta_set(&mut meta, meta_key::NEXT_SEQ, seq + 1)?;
+
+            // 笔记不去重：同一句话连存两次就是两条。但 content_index 要求
+            // hash 与 entries 一一对应，所以把自增 id 拌进哈希里保证唯一。
+            let hash = note_hash(id, text);
+
+            let rec = EntryRecord {
+                id,
+                hash,
+                kind: Kind::Note,
+                preview,
+                created_at: now,
+                source_app: None,
+                // 默认固定：不占 limit 配额，也不会被 retention_days 清掉。
+                pinned: true,
+                blob_ref: None,
+                truncated,
+            };
+            entries.insert(id, &enc(&rec)?[..])?;
+            texts.insert(id, &enc(&body)?[..])?;
+            content_index.insert(&hash[..], id)?;
+            usage.insert(seq, &encode_usage(id, now)[..])?;
+            seq_index.insert(id, seq)?;
+            pinned_index.insert(id, id)?;
+
+            let notes = meta_get(&meta, meta_key::NOTE_COUNT)?;
+            meta_set(&mut meta, meta_key::NOTE_COUNT, notes + 1)?;
+
+            view = self.view(rec, seq, now);
+        }
+        w.commit()?;
+        Ok(Some(view))
+    }
+
+    fn update_note(&self, id: EntryId, text: &str) -> StoreResult<Option<EntryView>> {
+        if text.trim().is_empty() || text.len() > HARD_MAX_BYTES {
+            return Ok(None);
+        }
+        let cfg = self.config()?;
+        let (stored, truncated) = truncate_bytes(text, cfg.max_text_bytes);
+        let preview = preview_of(stored);
+
+        let w = self.db.begin_write()?;
+        let view;
+        {
+            let mut entries = w.open_table(ENTRIES)?;
+            let mut texts = w.open_table(TEXTS)?;
+            let mut content_index = w.open_table(CONTENT_INDEX)?;
+            let usage = w.open_table(USAGE_ORDER)?;
+            let seq_index = w.open_table(SEQ_INDEX)?;
+
+            let Some(mut rec) = read_record_opt(&entries, id)? else {
+                return Ok(None);
+            };
+            if !rec.kind.is_note() {
+                return Ok(None);
+            }
+            let Some(seq) = seq_index.get(id)?.map(|g| g.value()) else {
+                return Ok(None);
+            };
+            let Some((_, ts)) = usage.get(seq)?.and_then(|g| decode_usage(g.value())) else {
+                return Ok(None);
+            };
+
+            // 正文变了，哈希也得跟着换：旧的从索引里摘掉，否则同一句旧文本
+            // 会被当成"已存在"。
+            content_index.remove(&rec.hash[..])?;
+            let hash = note_hash(id, text);
+            rec.hash = hash;
+            rec.preview = preview;
+            rec.truncated = truncated;
+            entries.insert(id, &enc(&rec)?[..])?;
+            texts.insert(id, &enc(&StoredBody::Note(stored.to_string()))?[..])?;
+            content_index.insert(&hash[..], id)?;
+            // seq / usage 不动：编辑不该让条目跳到列表最前面。
+            view = self.view(rec, seq, ts);
+        }
+        w.commit()?;
+        Ok(Some(view))
+    }
+    fn page(&self, scope: Scope, cursor: Option<Seq>, limit: usize) -> StoreResult<Page> {
         let r = self.db.begin_read()?;
         let usage = r.open_table(USAGE_ORDER)?;
         let entries = r.open_table(ENTRIES)?;
         let seq_index = r.open_table(SEQ_INDEX)?;
         let pinned = r.open_table(PINNED)?;
+        let meta = r.open_table(META)?;
+
+        // 两个视图的条目集合互斥，各自的总数靠 `NOTE_COUNT` 一次算出，
+        // 不用为了数数把 entries 全解一遍。
+        let note_count = meta_get(&meta, meta_key::NOTE_COUNT)? as usize;
+        let total_visible = match scope {
+            Scope::History => (entries.len()? as usize).saturating_sub(note_count),
+            Scope::Notes => note_count,
+        };
 
         let mut items: Vec<EntryView> = Vec::with_capacity(limit);
         let mut last_seq = None;
 
         // 固定条目置顶。数量通常很少，全取再按 seq 倒序即可。
         // 不这样做的话，固定只是"不被清理"，在时间流里照样会被淹没。
-        let mut pinned_ids = Vec::new();
-        for item in pinned.range(0u64..)? {
-            let (k, _) = item?;
-            pinned_ids.push(k.value());
-        }
-        let mut pinned_views = Vec::with_capacity(pinned_ids.len());
-        for id in pinned_ids {
-            let Some(seq) = seq_index.get(id)?.map(|g| g.value()) else {
-                continue;
-            };
-            let Some((pid, ts)) = usage
-                .get(seq)?
-                .and_then(|g| decode_usage(g.value()))
-            else {
-                continue;
-            };
-            if let Some(rec) = read_record_opt(&entries, pid)? {
-                pinned_views.push(self.view(rec, seq, ts));
+        //
+        // 笔记视图不做这件事：笔记**全部**是固定的，置顶等于没置顶，
+        // 直接按 seq 倒序（新的在上）就行。
+        if scope == Scope::History {
+            let mut pinned_ids = Vec::new();
+            for item in pinned.range(0u64..)? {
+                let (k, _) = item?;
+                pinned_ids.push(k.value());
             }
+            let mut pinned_views = Vec::with_capacity(pinned_ids.len());
+            for id in pinned_ids {
+                let Some(seq) = seq_index.get(id)?.map(|g| g.value()) else {
+                    continue;
+                };
+                let Some((pid, ts)) = usage
+                    .get(seq)?
+                    .and_then(|g| decode_usage(g.value()))
+                else {
+                    continue;
+                };
+                if let Some(rec) = read_record_opt(&entries, pid)? {
+                    if !scope.matches(rec.kind) {
+                        continue;
+                    }
+                    pinned_views.push(self.view(rec, seq, ts));
+                }
+            }
+            pinned_views.sort_by_key(|e| std::cmp::Reverse(e.seq));
+            items.extend(pinned_views.into_iter().take(limit));
         }
-        pinned_views.sort_by_key(|e| std::cmp::Reverse(e.seq));
-        items.extend(pinned_views.into_iter().take(limit));
         if items.len() >= limit {
             return Ok(Page {
                 items,
                 next_cursor: None,
-                total_visible: entries.len()? as usize,
+                total_visible,
             });
         }
 
@@ -455,6 +578,9 @@ impl ClipboardStore for RedbStore {
                 continue;
             }
             if let Some(rec) = read_record_opt(&entries, id)? {
+                if !scope.matches(rec.kind) {
+                    continue;
+                }
                 items.push(self.view(rec, seq, last_used_at));
                 last_seq = Some(seq);
             }
@@ -467,11 +593,11 @@ impl ClipboardStore for RedbStore {
         Ok(Page {
             items,
             next_cursor,
-            total_visible: entries.len()? as usize,
+            total_visible,
         })
     }
 
-    fn search(&self, query: &str, limit: usize) -> StoreResult<Vec<EntryView>> {
+    fn search(&self, scope: Scope, query: &str, limit: usize) -> StoreResult<Vec<EntryView>> {
         let needle = query.to_lowercase();
         if needle.is_empty() {
             return Ok(Vec::new());
@@ -489,7 +615,7 @@ impl ClipboardStore for RedbStore {
             let (id, last_used_at) = decode_usage(v.value())
                 .ok_or_else(|| StoreError::Codec("usage slot 长度错误".into()))?;
             if let Some(rec) = read_record_opt(&entries, id)? {
-                if rec.preview.to_lowercase().contains(&needle) {
+                if scope.matches(rec.kind) && rec.preview.to_lowercase().contains(&needle) {
                     out.push(self.view(rec, k.value(), last_used_at));
                     if out.len() >= limit {
                         return Ok(out);
@@ -521,6 +647,9 @@ impl ClipboardStore for RedbStore {
             };
             if body_matches(&body, &needle) {
                 if let Some(rec) = read_record_opt(&entries, id)? {
+                    if !scope.matches(rec.kind) {
+                        continue;
+                    }
                     out.push(self.view(rec, k.value(), last_used_at));
                     if out.len() >= limit {
                         break;
@@ -552,6 +681,7 @@ impl ClipboardStore for RedbStore {
                 width,
                 height,
             },
+            StoredBody::Note(text) => Content::Note(text),
         }))
     }
 
@@ -664,6 +794,7 @@ impl ClipboardStore for RedbStore {
             };
             pinned_index.remove(id)?;
             let pinned = is_pinned(&entries, id)?;
+            let note = read_record_opt(&entries, id)?.is_some_and(|r| r.kind.is_note());
             remove_entry(
                 &mut entries,
                 &mut texts,
@@ -677,6 +808,10 @@ impl ClipboardStore for RedbStore {
             if !pinned {
                 let count = meta_get(&meta, meta_key::NON_PINNED_COUNT)?;
                 meta_set(&mut meta, meta_key::NON_PINNED_COUNT, count.saturating_sub(1))?;
+            }
+            if note {
+                let count = meta_get(&meta, meta_key::NOTE_COUNT)?;
+                meta_set(&mut meta, meta_key::NOTE_COUNT, count.saturating_sub(1))?;
             }
         }
         w.commit()?;
@@ -978,7 +1113,21 @@ fn cleanup(
     Ok(removed)
 }
 
-fn meta_get(meta: &Table<&str, &[u8]>, key: &str) -> StoreResult<u64> {
+/// 笔记的哈希：把自增 id 拌进去，保证同一条文本存两次也是两条记录。
+///
+/// 只用于 `content_index` 的一一对应（不变量 I2）和 blob 命名，
+/// 不参与任何去重判断。
+fn note_hash(id: EntryId, text: &str) -> ContentHash {
+    let mut h = blake3::Hasher::new();
+    h.update(b"25zai-note");
+    h.update(&id.to_le_bytes());
+    h.update(text.as_bytes());
+    *h.finalize().as_bytes()
+}
+fn meta_get<T: ReadableTable<&'static str, &'static [u8]>>(
+    meta: &T,
+    key: &str,
+) -> StoreResult<u64> {
     match meta.get(key)? {
         Some(g) => decode_u64(g.value())
             .ok_or_else(|| StoreError::Codec(format!("meta {key} 长度错误"))),
@@ -1017,6 +1166,7 @@ fn body_matches(body: &StoredBody, needle: &str) -> bool {
             .iter()
             .any(|p| p.to_string_lossy().to_lowercase().contains(needle)),
         StoredBody::Image { .. } => false,
+        StoredBody::Note(text) => text.to_lowercase().contains(needle),
     }
 }
 

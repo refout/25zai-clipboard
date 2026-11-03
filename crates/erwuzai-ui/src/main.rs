@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use erwuzai_core::{request_show, Paths, SingleInstance};
 use erwuzai_core::i18n::tr;
 use erwuzai_store::{
-    CapturedItem, Payload, RedbStore, Remote, Reply, StoreCommand, StoreError, StoreHandle,
+    CapturedItem, Payload, RedbStore, Remote, Reply, Scope, StoreCommand, StoreError, StoreHandle,
     StoreResult, StoreService,
 };
 
@@ -143,6 +143,7 @@ fn run() -> Result<(), AnyError> {
         "--set-theme",
         "--set-tray-icon",
         "--seed",
+        "--note",
         "--peek",
         "--put-image",
         "--put-rich",
@@ -195,7 +196,7 @@ fn run() -> Result<(), AnyError> {
 
     // 开发用：25zai --search <关键词> 走和 UI 相同的存储层搜索，验证正文命中。
     if let Some(query) = arg_value("--search") {
-        let hits = call(&handle, StoreCommand::search(query, 20))?;
+        let hits = call(&handle, StoreCommand::search(Scope::History, query, 20))?;
         println!("命中 {} 条", hits.len());
         for entry in hits {
             println!(
@@ -209,7 +210,12 @@ fn run() -> Result<(), AnyError> {
 
     // 开发用：25zai --dump 打印当前历史，用于无 GUI 环境下验证采集链路。
     if std::env::args().any(|a| a == "--dump") {
-        let page = call(&handle, StoreCommand::page(None, 50))?;
+        let scope = if std::env::args().any(|a| a == "--notes") {
+            Scope::Notes
+        } else {
+            Scope::History
+        };
+        let page = call(&handle, StoreCommand::page(scope, None, 50))?;
         println!("共 {} 条", page.total_visible);
         for entry in page.items {
             println!(
@@ -219,6 +225,17 @@ fn run() -> Result<(), AnyError> {
                 entry.entry.source_app.as_deref().unwrap_or("-"),
                 entry.entry.preview.replace(['\r', '\n'], " ")
             );
+        }
+        return Ok(());
+    }
+
+    // 开发用：25zai --note 文本 直接写一条笔记，验证 InsertNote 这条链路。
+    if let Some(text) = arg_value("--note") {
+        let (cmd, rx) = StoreCommand::insert_note(text);
+        handle.submit(cmd);
+        match wait(rx)? {
+            Some(entry) => println!("note #{} saved", entry.entry.id),
+            None => println!("empty note ignored"),
         }
         return Ok(());
     }
@@ -291,7 +308,14 @@ fn run_ui() -> Result<(), AnyError> {
     // 在窗口起来之前定好语言，整棵 UI 树按它渲染。
     erwuzai_core::i18n::set_lang(config.language.resolve(erwuzai_platform::system_language_is_chinese()));
 
-    let (cmd, rx) = StoreCommand::page(None, 500);
+    // 首屏要和启动视图一致：--notes 起来就直接拿笔记，省一次切换重载。
+    let start_notes = std::env::args().any(|a| a == "--notes");
+    let scope = if start_notes {
+        Scope::Notes
+    } else {
+        Scope::History
+    };
+    let (cmd, rx) = StoreCommand::page(scope, None, 500);
     handle.submit(cmd);
     let page = rx
         .recv_timeout(Duration::from_secs(2))
@@ -322,8 +346,9 @@ fn run_ui() -> Result<(), AnyError> {
         Box::new(move |cc| {
             fonts::install_cjk(&cc.egui_ctx);
             let settings = std::env::args().any(|a| a == "--settings");
+            let notes = std::env::args().any(|a| a == "--notes");
             Ok(Box::new(app::App::new(
-                handle, events, ui_rx, config, page, settings,
+                handle, events, ui_rx, config, page, settings, notes,
             )))
         }),
     )
@@ -439,6 +464,7 @@ fn kind_of(kind: erwuzai_store::Kind) -> String {
         Kind::RichText => tr("富文本").to_string(),
         Kind::Image => tr("图片").to_string(),
         Kind::FileList => tr("文件").to_string(),
+        Kind::Note => tr("笔记").to_string(),
     }
 }
 

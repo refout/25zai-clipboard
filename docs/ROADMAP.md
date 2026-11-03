@@ -12,7 +12,7 @@
 | 版本 | 主题 | 状态 |
 |---|---|---|
 | v0.1.x | 剪贴板历史、全局热键、搜索、固定、主题、i18n、自启、商店上架 | 已发布 |
-| **v0.2.0** | **快速记录（笔记视图）** | 规划中 |
+| **v0.2.0** | **快速记录（笔记视图）** | 已实现，待验收 |
 | **v0.2.1** | **列表排序（下拉 + 手动拖拽）** | 规划中 |
 | v0.3 | 标签、导出、大输入窗 | 待定 |
 
@@ -74,6 +74,18 @@
 - [ ] 切换 tab 后不残留上一个视图的搜索词与来源筛选
 - [ ] 旧版本数据库直接打开不报错，旧条目正常显示
 - [ ] 保存笔记后剪贴板监听不会把它重复采集一遍
+
+### 实现位置
+
+| 部分 | 位置 |
+|---|---|
+| 数据模型 | `types.rs`：`Kind::Note`、`Content::Note`、`Scope` |
+| 存储 | `redb_store.rs`：`insert_note` / `update_note`，`NOTE_COUNT` 维护两个视图的总数 |
+| 协议 | `wire.rs`：`InsertNote` / `UpdateNote` / `UiRequest::ShowNotes` / `SetNoteHotkey` |
+| 热键 | `system.rs`：槽位化的 `rebind_at` / `poll_pressed` |
+| 界面 | `app.rs`：`View` 切换、`note_composer`、`start_note_edit` |
+
+调试用：`25zai --note "文本"` 写一条笔记，`25zai --dump --notes` 看笔记列表。
 
 ---
 

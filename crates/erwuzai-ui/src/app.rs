@@ -8,7 +8,7 @@ use eframe::egui;
 use erwuzai_core::i18n::{tr, tr_fmt};
 use erwuzai_platform::{ClipboardBackend, HotkeySpec, SystemClipboard};
 use erwuzai_store::{
-    Config, Content, EntryId, EntryView, Kind, Language, Page, PopupPosition, Reply,
+    Config, Content, EntryId, EntryView, Kind, Language, Page, PopupPosition, Reply, Scope,
     StoreCommand, StoreEvent, StoreHandle, ThemeMode, UiRequest,
 };
 
@@ -27,6 +27,8 @@ const SEARCH_DEBOUNCE: Duration = Duration::from_millis(200);
 const HIDDEN_POLL: Duration = Duration::from_millis(120);
 /// 预览最多显示几行。超出部分由 TextWrapping 自动省略。
 const PREVIEW_MAX_ROWS: usize = 5;
+/// 一次取多少条。切换视图时也用它重载。
+const PAGE_LIMIT: usize = 500;
 
 /// 内容与窗口边框的间距。右边这条留白同时是滚动条的落脚处：
 /// 滚动条贴边框，内容退到这里面。
@@ -95,6 +97,38 @@ impl SettingsTab {
     }
 }
 
+/// 主视图：剪贴板历史 / 笔记。两个视图的条目集合互斥。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum View {
+    #[default]
+    History,
+    Notes,
+}
+
+impl View {
+    fn scope(self) -> Scope {
+        match self {
+            View::History => Scope::History,
+            View::Notes => Scope::Notes,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            View::History => tr("历史"),
+            View::Notes => tr("笔记"),
+        }
+    }
+}
+
+/// 正在录哪个热键。设置页有两个入口，录键状态要分开记。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Recording {
+    #[default]
+    None,
+    Main,
+    Note,
+}
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum KindFilter {
     #[default]
@@ -190,7 +224,21 @@ pub struct App {
     /// 守护进程推过来的控制指令：唤起 / 打开设置 / 退出。
     ui_rx: Receiver<UiRequest>,
     /// 录键模式：下一个按下的组合直接生效。
-    recording: bool,
+    recording: Recording,
+    /// 当前视图。
+    view: View,
+    /// 笔记输入框的内容。
+    note_input: String,
+    /// 正在行内编辑的笔记：(id, 草稿)。
+    note_editing: Option<(EntryId, String)>,
+    /// 本帧把焦点交给笔记输入框（切视图 / 保存后）。
+    note_focus: bool,
+    /// 输入框的 egui id，用来判断 Enter 该归谁。
+    note_input_id: Option<egui::Id>,
+    /// 本帧把焦点交给行内编辑框。
+    note_edit_focus: bool,
+    /// 切换视图后重载分页的回执。
+    page_in_flight: Option<Reply<Page>>,
 }
 
 impl App {
@@ -201,6 +249,7 @@ impl App {
         config: Config,
         page: Page,
         open_settings: bool,
+        open_notes: bool,
     ) -> Self {
         // 热键和托盘都在守护进程里，"叫回来"的手段一定存在，
         // 除非调试时显式要求常驻。
@@ -247,7 +296,14 @@ impl App {
             hotkey_error: None,
             backend: SystemClipboard::new(),
             ui_rx,
-            recording: false,
+            recording: Recording::None,
+            view: if open_notes { View::Notes } else { View::History },
+            note_input: String::new(),
+            note_editing: None,
+            note_focus: open_notes,
+            note_input_id: None,
+            note_edit_focus: false,
+            page_in_flight: None,
         }
     }
 
@@ -256,8 +312,17 @@ impl App {
             match event {
                 StoreEvent::Added(items) => {
                     for item in items {
+                        // 另一个视图的新条目不该混进来（笔记和历史互斥）。
+                        if !self.view.scope().matches(item.entry.kind) {
+                            continue;
+                        }
                         self.entries.insert(0, item);
                         self.total_visible += 1;
+                    }
+                }
+                StoreEvent::Updated(entry) => {
+                    if let Some(pos) = self.entries.iter().position(|e| e.entry.id == entry.entry.id) {
+                        self.entries[pos] = entry;
                     }
                 }
                 StoreEvent::Moved {
@@ -285,6 +350,14 @@ impl App {
 
     /// 类型 + 来源过滤，与关键词无关。
     fn passes_filters(&self, entry: &EntryView) -> bool {
+        // 先卡视图：历史里不出现笔记，笔记里也不出现剪贴板条目。
+        if !self.view.scope().matches(entry.entry.kind) {
+            return false;
+        }
+        // 笔记视图没有类型和来源的概念，这两排筛选在那边是隐藏的。
+        if self.view == View::Notes {
+            return true;
+        }
         if !self.kind_filter.matches(entry.entry.kind) {
             return false;
         }
@@ -369,7 +442,7 @@ impl App {
             return;
         }
 
-        let (cmd, rx) = StoreCommand::search(needle, 200);
+        let (cmd, rx) = StoreCommand::search(self.view.scope(), needle, 200);
         if self.handle.submit(cmd) {
             self.in_flight = Some((self.query_gen, rx));
         }
@@ -383,6 +456,107 @@ impl App {
             .count()
     }
 
+    /// 切视图时重载分页：服务端按 scope 过滤，本地那份列表不能直接复用。
+    fn switch_view(&mut self, view: View) {
+        if self.view == view {
+            return;
+        }
+        self.view = view;
+        // 上一个视图的搜索词 / 筛选 / 搜索命中都带不过去。
+        self.query.clear();
+        self.last_query.clear();
+        self.source_filter = None;
+        self.kind_filter = KindFilter::All;
+        self.search_extra.clear();
+        self.in_flight = None;
+        self.note_editing = None;
+        self.selected = 0;
+        self.scroll_to = Some(0);
+        self.focus_requested = false;
+        self.note_focus = view == View::Notes;
+        self.reload_page();
+    }
+
+    fn reload_page(&mut self) {
+        let (cmd, rx) = StoreCommand::page(self.view.scope(), None, PAGE_LIMIT);
+        if self.handle.submit(cmd) {
+            self.page_in_flight = Some(rx);
+        }
+    }
+
+    fn poll_page(&mut self) {
+        let Some(rx) = &self.page_in_flight else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(page)) => {
+                self.entries = page.items;
+                self.total_visible = page.total_visible;
+                self.search_extra.clear();
+                self.selected = 0;
+                self.page_in_flight = None;
+            }
+            Ok(Err(e)) => {
+                eprintln!("{}", tr_fmt("25zai: 读取列表失败：{}", &[&e]));
+                self.page_in_flight = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.page_in_flight = None,
+        }
+    }
+
+    /// 进入行内编辑。草稿必须从存储层取全文——列表里的 preview 是截断过的，
+    /// 直接拿它当草稿会把长笔记截短。
+    fn start_note_edit(&mut self, id: EntryId) {
+        let (cmd, reply) = StoreCommand::content(id);
+        if !self.handle.submit(cmd) {
+            return;
+        }
+        let Ok(Ok(Some(Content::Note(text)))) = reply.recv_timeout(Duration::from_millis(300))
+        else {
+            return;
+        };
+        self.note_editing = Some((id, text));
+        self.note_edit_focus = true;
+    }
+    /// 笔记输入条：Enter 保存并清空，Shift+Enter 换行。
+    ///
+    /// 只在输入框有焦点时吞 Enter，否则会把列表的回放键抢掉。
+    fn note_composer(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let focused = self
+            .note_input_id
+            .is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        let save = focused && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+
+        inset_right(ui, |ui| {
+            let response = ui.add_sized(
+                [ui.available_width(), 30.0],
+                egui::TextEdit::multiline(&mut self.note_input)
+                    .hint_text(tr("记点什么，Enter 保存，Shift+Enter 换行"))
+                    .desired_rows(1)
+                    .margin(egui::Margin::symmetric(8, 6)),
+            );
+            self.note_input_id = Some(response.id);
+            if self.note_focus {
+                response.request_focus();
+                self.note_focus = false;
+            }
+        });
+
+        if save {
+            let text = self.note_input.trim().to_string();
+            if !text.is_empty() {
+                // 事件回来会把它插到列表顶部；输入框清空、焦点留在原处，方便连着记。
+                let (cmd, _rx) = StoreCommand::insert_note(text);
+                self.handle.submit(cmd);
+                self.note_input.clear();
+                self.note_focus = true;
+                self.selected = 0;
+                self.scroll_to = Some(0);
+            }
+        }
+        ui.add_space(4.0);
+    }
     fn hide(&mut self, ctx: &egui::Context) {
         // 钉住窗口时不接受任何tr("关闭")：失焦、Esc、点条目回放都不关。
         // 要关就先点顶栏图钉解除，或者走设置里的退出。
@@ -408,6 +582,8 @@ impl App {
         self.query.clear();
         self.selected = 0;
         self.focus_requested = false;
+        self.note_editing = None;
+        self.note_focus = self.view == View::Notes;
         // 托盘tr("设置")拉起来的新进程：第一次 show 就落在设置页。
         self.show_settings = std::mem::take(&mut self.open_settings);
         self.window_pinned = false;
@@ -536,6 +712,14 @@ impl App {
                     self.show(ctx);
                     self.show_settings = true;
                 }
+                UiRequest::ShowNotes => {
+                    let was = self.view;
+                    self.show(ctx);
+                    if was != View::Notes {
+                        self.switch_view(View::Notes);
+                    }
+                    self.note_focus = true;
+                }
                 UiRequest::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
         }
@@ -588,13 +772,21 @@ impl App {
     }
 
     /// 应用一个新组合。失败时保留原来那个，并显示原因。
-    fn apply_spec(&mut self, spec: HotkeySpec) {
+    fn apply_spec(&mut self, target: Recording, spec: HotkeySpec) {
         // 热键归守护进程所有：注册失败时它会把旧的装回去，这里只负责显示结果。
         let text = spec.to_string();
-        match self.handle.set_hotkey(&text) {
+        let result = match target {
+            Recording::Note => self.handle.set_note_hotkey(&text),
+            _ => self.handle.set_hotkey(&text),
+        };
+        match result {
             Ok(()) => {
                 self.hotkey_error = None;
-                self.config.hotkey = text;
+                if target == Recording::Note {
+                    self.config.note_hotkey = text;
+                } else {
+                    self.config.hotkey = text;
+                }
                 self.config_dirty = true;
             }
             Err(e) => self.hotkey_error = Some(tr_fmt("注册失败：{}", &[&e])),
@@ -606,7 +798,7 @@ impl App {
     /// Ctrl / Shift / Alt 本身也会作为 `Event::Key` 出现（ShiftLeft、ControlRight…），
     /// 必须跳过，否则按下 Ctrl 的瞬间就被当成tr("你选了 Ctrl 这个键")。
     fn capture_hotkey(&mut self, ctx: &egui::Context) {
-        if !self.recording {
+        if self.recording == Recording::None {
             return;
         }
 
@@ -639,7 +831,7 @@ impl App {
         });
 
         if cancel {
-            self.recording = false;
+            self.recording = Recording::None;
             return;
         }
         let Some(key) = hit else { return };
@@ -659,11 +851,15 @@ impl App {
             return;
         }
 
-        self.recording = false;
-        self.apply_spec(HotkeySpec {
-            modifiers: mods,
-            key: key_name(key),
-        });
+        let target = self.recording;
+        self.recording = Recording::None;
+        self.apply_spec(
+            target,
+            HotkeySpec {
+                modifiers: mods,
+                key: key_name(key),
+            },
+        );
     }
 
     /// 主题、主题色、字号。只在实际变化时调用——`style_mut_of` 会改全局样式，
@@ -1005,6 +1201,31 @@ impl App {
         ui.weak(tr("固定条目既不计入上限，也不会被清理"));
     }
 
+    /// 一行热键设置：按钮 + 说明。`note` 决定改的是哪个组合。
+    fn hotkey_row(&mut self, ui: &mut egui::Ui, target: Recording, note: bool) {
+        ui.horizontal(|ui| {
+            let recording = self.recording == target;
+            let label = if recording {
+                tr("按下组合键…").to_string()
+            } else if note {
+                self.config.note_hotkey.clone()
+            } else {
+                self.config.hotkey.clone()
+            };
+            if ui
+                .add_sized([130.0, 26.0], egui::Button::new(label))
+                .clicked()
+            {
+                self.recording = if recording { Recording::None } else { target };
+                self.hotkey_error = None;
+            }
+            ui.weak(if recording {
+                tr("按 Esc 取消")
+            } else {
+                tr("点击后按下新组合")
+            });
+        });
+    }
     fn trigger_section(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("settings-trigger")
             .num_columns(2)
@@ -1012,25 +1233,11 @@ impl App {
             .min_col_width(60.0)
             .show(ui, |ui| {
                 ui.label(tr("快捷键"));
-                ui.horizontal(|ui| {
-                    let label = if self.recording {
-                        tr("按下组合键…").to_string()
-                    } else {
-                        self.config.hotkey.clone()
-                    };
-                    if ui
-                        .add_sized([130.0, 26.0], egui::Button::new(label))
-                        .clicked()
-                    {
-                        self.recording = !self.recording;
-                        self.hotkey_error = None;
-                    }
-                    ui.weak(if self.recording {
-                        tr("按 Esc 取消")
-                    } else {
-                        tr("点击后按下新组合")
-                    });
-                });
+                self.hotkey_row(ui, Recording::Main, false);
+                ui.end_row();
+
+                ui.label(tr("笔记快捷键"));
+                self.hotkey_row(ui, Recording::Note, true);
                 ui.end_row();
 
                 ui.label(tr("弹出位置"));
@@ -1105,6 +1312,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.thumb_loads = 0;
         self.drain_events();
+        self.poll_page();
         self.poll_search();
         let ctx = ui.ctx().clone();
         self.poll_ui(&ctx);
@@ -1202,18 +1410,42 @@ impl eframe::App for App {
 
 impl App {
     fn list_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let (down, up, enter, esc) = ctx.input(|i| {
+        let (down, up, enter, esc, f2) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowDown),
                 i.key_pressed(egui::Key::ArrowUp),
                 i.key_pressed(egui::Key::Enter),
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::F2),
             )
         });
+        // 这一帧的 Enter 归谁：笔记输入框 / 行内编辑 / 列表回放，三者只能有一个。
+        let note_input_focused = self
+            .note_input_id
+            .is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        let editing = self.note_editing.is_some();
 
         if esc {
-            self.hide(ctx);
-            return;
+            // 编辑中的 Esc 只取消编辑，不关窗口。
+            if editing {
+                self.note_editing = None;
+                self.note_edit_focus = false;
+            } else {
+                self.hide(ctx);
+                return;
+            }
+        }
+
+        // 行内编辑：Enter 提交。先吃掉按键，否则 TextEdit 会再插一个换行。
+        if editing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            if let Some((id, draft)) = self.note_editing.take() {
+                let text = draft.trim().to_string();
+                if !text.is_empty() {
+                    let (cmd, _rx) = StoreCommand::update_note(id, text);
+                    self.handle.submit(cmd);
+                }
+                self.note_edit_focus = false;
+            }
         }
 
         let rows: Vec<Row> = self
@@ -1253,11 +1485,16 @@ impl App {
             if self.selected != before {
                 self.scroll_to = Some(self.selected);
             }
-            if enter {
+            if enter && !note_input_focused && !editing {
                 let id = rows[self.selected].id;
                 let as_plain = self.config.replay_as_plain || ctx.input(|i| i.modifiers.shift);
                 self.replay(id, ctx, as_plain);
                 return;
+            }
+            // F2 编辑选中的笔记（先取全文，预览是截断的，不能拿它当草稿）。
+            if f2 && self.view == View::Notes && !editing {
+                let id = rows[self.selected].id;
+                self.start_note_edit(id);
             }
         }
 
@@ -1265,6 +1502,25 @@ impl App {
         let mut toggle_pin: Option<(EntryId, bool)> = None;
 
         ui.vertical(|ui| {
+            // 一级 tab：历史 / 笔记。两个视图的条目集合互斥，切换要重载分页。
+            inset_right(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for view in [View::History, View::Notes] {
+                        if ui
+                            .selectable_label(self.view == view, view.label())
+                            .clicked()
+                        {
+                            self.switch_view(view);
+                        }
+                    }
+                });
+            });
+            ui.add_space(6.0);
+
+            if self.view == View::Notes {
+                self.note_composer(ui, ctx);
+            }
+
             inset_right(ui, |ui| ui.horizontal(|ui| {
                 // 右侧常驻两个 28/48 宽的按钮，再各留 8px 间距。
                 let width = (ui.available_width() - 92.0).max(80.0);
@@ -1273,11 +1529,15 @@ impl App {
                 let response = ui.add_sized(
                     [width, 28.0],
                     egui::TextEdit::singleline(&mut self.query)
-                        .hint_text(tr("搜索剪贴板历史"))
+                        .hint_text(match self.view {
+                            View::History => tr("搜索剪贴板历史"),
+                            View::Notes => tr("搜索笔记"),
+                        })
                         .align(egui::Align2::LEFT_CENTER)
                         .margin(egui::Margin::symmetric(8, 5)),
                 );
-                if !self.focus_requested {
+                // 笔记视图的焦点属于输入框，搜索框别抢。
+                if !self.focus_requested && self.view == View::History {
                     response.request_focus();
                     self.focus_requested = true;
                 }
@@ -1296,6 +1556,10 @@ impl App {
 
             ui.add_space(4.0);
             inset_right(ui, |ui| ui.horizontal_wrapped(|ui| {
+                // 笔记视图没有类型 / 来源的概念，这一行整块不画。
+                if self.view != View::History {
+                    return;
+                }
                 for filter in [
                     KindFilter::All,
                     KindFilter::Text,
@@ -1353,10 +1617,12 @@ impl App {
             if rows.is_empty() {
                 ui.add_space(24.0);
                 ui.vertical_centered(|ui| {
-                    ui.weak(if self.entries.is_empty() {
-                        tr("还没有历史。复制点什么试试。")
-                    } else {
+                    ui.weak(if !self.entries.is_empty() {
                         tr("没有匹配的条目")
+                    } else if self.view == View::Notes {
+                        tr("还没有笔记。上面输入一条试试。")
+                    } else {
+                        tr("还没有历史。复制点什么试试。")
                     });
                 });
                 return;
@@ -1384,6 +1650,10 @@ impl App {
                     for (row, item) in rows.iter().enumerate() {
                         let (id, preview, pinned) = (item.id, &item.preview, item.pinned);
                         let selected = row == self.selected;
+                        // 笔记没有固定按钮：它们本来就是永久保留的。
+                        let is_note = item.kind.is_note();
+                        let editing_this =
+                            matches!(&self.note_editing, Some((eid, _)) if *eid == id);
                         // 行尾星标的矩形，用来把行的点击区让出来。
                         let mut pin_rect = egui::Rect::NOTHING;
                         // 图片行左边放一张缩略图。读不出来（blob 被清掉）就留空，
@@ -1412,14 +1682,35 @@ impl App {
                                     // 预览只吃「剩余宽度 - 按钮宽」：先把列宽定死，
                                     // 星标才不会被长文本顶出可视区。
                                     let gap = ui.spacing().item_spacing.x;
-                                    let preview_w =
-                                        (ui.available_width() - ROW_ACTION_W - gap).max(24.0);
+                                    // 笔记没有行尾按钮，预览可以用满整行。
+                                    let reserved = if is_note { 0.0 } else { ROW_ACTION_W + gap };
+                                    let preview_w = (ui.available_width() - reserved).max(24.0);
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(preview_w, 0.0),
                                         egui::Layout::top_down(egui::Align::Min),
                                         |ui| {
                                             ui.set_min_width(preview_w);
                                             ui.set_max_width(preview_w);
+                                            if editing_this {
+                                                let mut draft = self
+                                                    .note_editing
+                                                    .take()
+                                                    .map(|(_, text)| text)
+                                                    .unwrap_or_default();
+                                                let response = ui.add_sized(
+                                                    [preview_w, 24.0],
+                                                    egui::TextEdit::multiline(&mut draft)
+                                                        .desired_rows(1)
+                                                        .desired_width(preview_w)
+                                                        .margin(egui::Margin::symmetric(6, 4)),
+                                                );
+                                                if self.note_edit_focus {
+                                                    response.request_focus();
+                                                    self.note_edit_focus = false;
+                                                }
+                                                self.note_editing = Some((id, draft));
+                                                return;
+                                            }
                                             let mut job = egui::text::LayoutJob::default();
                                             // 横向布局里 wrap_mode 是 Extend，Label 会把
                                             // max_width 改成 INFINITY——长串 URL 会一路顶穿
@@ -1447,10 +1738,12 @@ impl App {
                                         },
                                     );
 
-                                    let pin = entry_pin_button(ui, pinned, selected);
-                                    pin_rect = pin.rect;
-                                    if pin.clicked() {
-                                        toggle_pin = Some((id, !pinned));
+                                    if !is_note {
+                                        let pin = entry_pin_button(ui, pinned, selected);
+                                        pin_rect = pin.rect;
+                                        if pin.clicked() {
+                                            toggle_pin = Some((id, !pinned));
+                                        }
                                     }
                                 });
                             })
@@ -1478,6 +1771,9 @@ impl App {
                             egui::pos2((pin_rect.left() - 2.0).max(rect.left()), rect.max.y),
                         );
                         let response = ui.interact(click_rect, response.id, egui::Sense::click());
+                        if response.double_clicked() && is_note && !editing_this {
+                            self.start_note_edit(id);
+                        }
                         if response.clicked() {
                             self.selected = row;
                             replay = Some(id);
@@ -1551,6 +1847,8 @@ fn content_to_raw(content: Content) -> Option<erwuzai_platform::RawClipboard> {
             width,
             height,
         },
+        // 笔记就是一段纯文本，复制 / 回放走同一条路。
+        Content::Note(text) => RawClipboard::Text(text),
     })
 }
 
@@ -1722,8 +2020,7 @@ fn entry_pin_button(ui: &mut egui::Ui, pinned: bool, selected: bool) -> egui::Re
     response.on_hover_text(if pinned {
         tr("取消钉住")
     } else {
-        tr("钉住这条：不会被清理，并排在最前")
-    })
+        tr("钉住这条：不会被清理，并排在最前")    })
 }
 
 /// 图钉：一个 45° 的方形钉帽 + 一根斜向的针。

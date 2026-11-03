@@ -131,6 +131,13 @@ translations! {
 
     // 主列表
     "搜索剪贴板历史" => "Search clipboard history",
+    "搜索笔记" => "Search notes",
+    "历史" => "History",
+    "笔记" => "Notes",
+    "新建笔记" => "New note",
+    "笔记快捷键" => "Note hotkey",
+    "记点什么，Enter 保存，Shift+Enter 换行" => "Jot something down. Enter saves, Shift+Enter adds a line.",
+    "还没有笔记。上面输入一条试试。" => "No notes yet. Type one above.",
     "全部" => "All",
     "全部来源" => "All sources",
     "文本" => "Text",

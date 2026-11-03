@@ -54,6 +54,11 @@ pub enum Kind {
     RichText,
     Image,
     FileList,
+    /// 用户主动敲进来的笔记。不走剪贴板采集管道，也不参与去重。
+    ///
+    /// **只能追加在末尾**：EntryRecord 用 postcard 序列化，变体索引按声明
+    /// 顺序编码，插到中间会让旧库里已有的条目解不出来。
+    Note,
 }
 
 impl Kind {
@@ -63,7 +68,13 @@ impl Kind {
             Kind::RichText => "rich_text",
             Kind::Image => "image",
             Kind::FileList => "file_list",
+            Kind::Note => "note",
         }
+    }
+
+    /// 笔记是用户手写的，不是采集来的。
+    pub fn is_note(self) -> bool {
+        matches!(self, Kind::Note)
     }
 
     /// 二进制载荷不进 `texts`，只走 blob。
@@ -159,6 +170,29 @@ pub enum Content {
         width: u32,
         height: u32,
     },
+    /// 笔记正文。追加在末尾，理由同 Kind::Note。
+    Note(String),
+}
+
+/// 列表查询的范围。笔记与剪贴板条目在 UI 上是两个 tab，集合互斥。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    /// 剪贴板历史，**不含**笔记。
+    #[default]
+    History,
+    /// 只有笔记。
+    Notes,
+}
+
+impl Scope {
+    /// 这条记录是否属于本范围。
+    pub fn matches(self, kind: Kind) -> bool {
+        match self {
+            Scope::History => !kind.is_note(),
+            Scope::Notes => kind.is_note(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -247,6 +281,11 @@ pub struct Config {
     /// 单条文本 / 路径列表上限，超出截断并标记 `truncated`。
     pub max_text_bytes: usize,
     pub hotkey: String,
+    /// 唤起「笔记」tab 的第二个全局热键。
+    ///
+    /// 和 `hotkey` 一样归守护进程所有，改键要经过 IPC。
+    /// 容器级 `#[serde(default)]` 让老配置缺这个字段时退回默认值。
+    pub note_hotkey: String,
     /// 开机自动启动。守护进程在启动和配置变更时把它同步到系统里
     /// （Windows 写 HKCU 的 Run 键）。默认开——剪贴板历史不常驻就没意义。
     #[serde(default = "default_true")]
@@ -278,6 +317,7 @@ impl Default for Config {
             paste_on_click: true,
             max_text_bytes: 1024 * 1024,
             hotkey: "Alt+V".to_string(),
+            note_hotkey: "Alt+N".to_string(),
             autostart: true,
             tray_icon: None,
             theme: ThemeMode::System,
@@ -314,6 +354,8 @@ pub enum StoreEvent {
         last_used_at: i64,
     },
     Removed(Vec<EntryId>),
+    /// 条目内容被改写（目前只有编辑笔记），位置不变。
+    Updated(EntryView),
     ConfigChanged(Box<Config>),
     /// 非致命问题：通道丢弃、孤儿 blob、快捷键注册失败等。
     Warning(String),

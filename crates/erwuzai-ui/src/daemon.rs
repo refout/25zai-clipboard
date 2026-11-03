@@ -19,8 +19,8 @@ use std::time::Duration;
 use erwuzai_core::i18n::tr;
 use erwuzai_core::{InstanceError, Paths, SingleInstance};
 use erwuzai_platform::{
-    pump_messages, set_menu_dark_mode, EchoGuard, HotkeyBackend, HotkeySpec, SystemHotkey,
-    SystemTray, TrayEvent,
+    pump_messages, set_menu_dark_mode, EchoGuard, HotkeySpec, SystemHotkey, SystemTray, TrayEvent,
+    SLOT_MAIN, SLOT_NOTE,
 };
 use erwuzai_store::{
     to_command, ClipboardStore, Msg, RedbStore, StoreHandle, StoreService, UiRequest, WireReply,
@@ -34,6 +34,7 @@ type AnyError = Box<dyn std::error::Error + Send + Sync>;
 /// 热键管理器不是 Send（里面是 Win32 的裸指针），只能留在主线程上，
 /// 服务线程要改键就往这里投一个活。
 struct HotkeyJob {
+    slot: usize,
     spec: String,
     reply: std::sync::mpsc::Sender<Result<(), String>>,
 }
@@ -88,7 +89,7 @@ pub fn run() -> Result<(), AnyError> {
     if let Err(e) = erwuzai_platform::autostart::set_enabled(config.autostart, &exe) {
         eprintln!("25zai: 设置开机自启失败：{e}");
     }
-    let page = store.page(None, 1)?;
+    let page = store.page(erwuzai_store::Scope::History, None, 1)?;
     println!("loaded {} entries from {}", page.total_visible, paths.db().display());
 
     let StoreService {
@@ -101,7 +102,7 @@ pub fn run() -> Result<(), AnyError> {
     let _watcher = listener::start(handle.clone(), guard.clone())?;
     println!("clipboard watcher started");
 
-    let mut hotkey = register_hotkey(&config.hotkey);
+    let mut hotkey = register_hotkeys(&config.hotkey, &config.note_hotkey);
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel::<HotkeyJob>();
     let tray = match SystemTray::new(
         tr("25仔 — 剪贴板历史"),
@@ -180,7 +181,7 @@ pub fn run() -> Result<(), AnyError> {
 
         // 改键的活在这里落地（热键管理器不是 Send，不能挪到别的线程）。
         while let Ok(job) = hotkey_rx.try_recv() {
-            let result = rebind(&mut hotkey, &job.spec);
+            let result = rebind(&mut hotkey, job.slot, &job.spec);
             let _ = job.reply.send(result);
         }
 
@@ -191,15 +192,20 @@ pub fn run() -> Result<(), AnyError> {
             }
         }
 
-        let pressed = hotkey.as_ref().is_some_and(|m| m.poll_pressed());
-        if pressed {
-            ctx.open_ui(false);
+        if let Some(slot) = hotkey.as_ref().and_then(|m| m.poll_pressed()) {
+            // Alt+N 直接落在笔记 tab，省掉"先开窗再点一下"的那一步。
+            ctx.open_ui(if slot == SLOT_NOTE {
+                UiRequest::ShowNotes
+            } else {
+                UiRequest::Show
+            });
         }
 
         if let Some(tray) = &tray {
             match tray.poll() {
-                Some(TrayEvent::Show) => ctx.open_ui(false),
-                Some(TrayEvent::Settings) => ctx.open_ui(true),
+                Some(TrayEvent::Show) => ctx.open_ui(UiRequest::Show),
+                Some(TrayEvent::NewNote) => ctx.open_ui(UiRequest::ShowNotes),
+                Some(TrayEvent::Settings) => ctx.open_ui(UiRequest::ShowSettings),
                 Some(TrayEvent::Quit) => {
                     ctx.send_to_ui(&Msg::Ui(UiRequest::Quit));
                     return Ok(());
@@ -217,7 +223,11 @@ pub fn run() -> Result<(), AnyError> {
     }
 }
 
-fn register_hotkey(text: &str) -> Option<SystemHotkey> {
+/// 建一个热键管理器并注册两个组合。
+///
+/// 两个槽位互不牵连：`Alt+N` 被别的软件占用时，`Alt+V` 必须照常可用，
+/// 反之亦然。所以注册失败只打日志，不整体放弃。
+fn register_hotkeys(main: &str, note: &str) -> Option<SystemHotkey> {
     let manager = match SystemHotkey::new() {
         Ok(manager) => manager,
         Err(e) => {
@@ -225,18 +235,19 @@ fn register_hotkey(text: &str) -> Option<SystemHotkey> {
             return None;
         }
     };
+    register_slot(&manager, SLOT_MAIN, main);
+    register_slot(&manager, SLOT_NOTE, note);
+    Some(manager)
+}
+
+fn register_slot(manager: &SystemHotkey, slot: usize, text: &str) {
     match HotkeySpec::parse(text) {
-        Ok(spec) => match manager.register(&spec) {
-            Ok(()) => Some(manager),
-            Err(e) => {
-                eprintln!("25zai: 快捷键注册失败：{e}");
-                None
+        Ok(spec) => {
+            if let Err(e) = manager.rebind_at(slot, &spec) {
+                eprintln!("25zai: 快捷键 {text} 注册失败：{e}");
             }
-        },
-        Err(e) => {
-            eprintln!("25zai: 快捷键配置无效：{e}");
-            None
         }
+        Err(e) => eprintln!("25zai: 快捷键配置无效（{text}）：{e}"),
     }
 }
 
@@ -256,21 +267,45 @@ impl Ctx {
         let _ = conn.write_all(line.as_bytes());
     }
 
+    /// 改键要回主线程落地（热键管理器不是 Send），这里同步等结果。
+    fn change_hotkey(&self, slot: usize, spec: String) -> WireReply {
+        let (tx, rx) = std::sync::mpsc::channel();
+        if self
+            .hotkey_tx
+            .send(HotkeyJob {
+                slot,
+                spec,
+                reply: tx,
+            })
+            .is_err()
+        {
+            return WireReply::err_text("守护进程主循环已停止".into());
+        }
+        match rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(Ok(())) => WireReply::ok_empty(),
+            Ok(Err(e)) => WireReply::err_text(e),
+            Err(_) => WireReply::err_text("改键超时".into()),
+        }
+    }
     /// UI 不在就拉起来；已经连着就只是让它显示出来。
-    fn open_ui(&self, settings: bool) {
+    ///
+    /// 参数就是"要打开成什么样"，三个入口（热键 / 托盘 / 第二实例）共用。
+    fn open_ui(&self, req: UiRequest) {
         if self.ui.lock().map(|g| g.is_some()).unwrap_or(false) {
-            self.send_to_ui(&Msg::Ui(if settings {
-                UiRequest::ShowSettings
-            } else {
-                UiRequest::Show
-            }));
+            self.send_to_ui(&Msg::Ui(req));
             return;
         }
         let mut cmd = std::process::Command::new(&self.exe);
         cmd.arg("--ui");
         // UI 是刚起的进程，没有连接可以推 UiRequest，只能靠启动参数。
-        if settings {
-            cmd.arg("--settings");
+        match req {
+            UiRequest::ShowSettings => {
+                cmd.arg("--settings");
+            }
+            UiRequest::ShowNotes => {
+                cmd.arg("--notes");
+            }
+            _ => {}
         }
         #[cfg(windows)]
         {
@@ -293,7 +328,7 @@ impl Ctx {
         }
         // 旧版第二实例的握手，保持兼容。
         if line.trim() == "show" {
-            self.open_ui(false);
+            self.open_ui(UiRequest::Show);
             return;
         }
 
@@ -343,17 +378,8 @@ impl Ctx {
                 self.quit.store(true, std::sync::atomic::Ordering::Relaxed);
                 WireReply::ok_empty()
             }
-            WireRequest::SetHotkey { spec } => {
-                let (tx, rx) = std::sync::mpsc::channel();
-                if self.hotkey_tx.send(HotkeyJob { spec, reply: tx }).is_err() {
-                    return WireReply::err_text("守护进程主循环已停止".into());
-                }
-                match rx.recv_timeout(Duration::from_secs(2)) {
-                    Ok(Ok(())) => WireReply::ok_empty(),
-                    Ok(Err(e)) => WireReply::err_text(e),
-                    Err(_) => WireReply::err_text("改键超时".into()),
-                }
-            }
+            WireRequest::SetHotkey { spec } => self.change_hotkey(SLOT_MAIN, spec),
+            WireRequest::SetNoteHotkey { spec } => self.change_hotkey(SLOT_NOTE, spec),
             other => match to_command(other) {
                 Some((cmd, wait)) => {
                     self.handle.submit(cmd);
@@ -367,14 +393,14 @@ impl Ctx {
 }
 
 /// 换绑热键：先注销旧的再注册新的，失败时把旧的装回去。
-fn rebind(slot: &mut Option<SystemHotkey>, text: &str) -> Result<(), String> {
+fn rebind(manager: &mut Option<SystemHotkey>, slot: usize, text: &str) -> Result<(), String> {
     let spec = HotkeySpec::parse(text).map_err(|e| e.to_string())?;
-    match slot.as_mut() {
-        Some(manager) => manager.rebind(&spec).map_err(|e| e.to_string()),
+    match manager.as_mut() {
+        Some(manager) => manager.rebind_at(slot, &spec).map_err(|e| e.to_string()),
         None => {
-            let manager = SystemHotkey::new().map_err(|e| e.to_string())?;
-            manager.register(&spec).map_err(|e| e.to_string())?;
-            *slot = Some(manager);
+            let created = SystemHotkey::new().map_err(|e| e.to_string())?;
+            created.rebind_at(slot, &spec).map_err(|e| e.to_string())?;
+            *manager = Some(created);
             Ok(())
         }
     }

@@ -411,8 +411,11 @@ mod placement_tests {
 
 pub struct SystemHotkey {
     manager: GlobalHotKeyManager,
-    /// 当前注册的组合，改键时需要它来注销。
-    current: std::cell::RefCell<Option<HotKey>>,
+    /// 按槽位登记的当前组合。改键时要先注销旧的。
+    ///
+    /// 用 `Vec<Option<..>>` 而不是单个字段：`poll_pressed` 拿到的是
+    /// 全局事件队列，事件里只有 `HotKey` 的 id，必须靠这张表反查是哪个槽位。
+    slots: std::cell::RefCell<Vec<Option<HotKey>>>,
 }
 
 impl SystemHotkey {
@@ -423,18 +426,27 @@ impl SystemHotkey {
             GlobalHotKeyManager::new().map_err(|e| PlatformError::Hotkey(e.to_string()))?;
         Ok(Self {
             manager,
-            current: std::cell::RefCell::new(None),
+            slots: std::cell::RefCell::new(Vec::new()),
         })
     }
 
-    /// 换成新的组合。新组合注册失败时恢复旧的，不会把用户锁在外面。
+    /// 换绑主热键（槽位 0）。
     pub fn rebind(&self, spec: &HotkeySpec) -> PlatformResult<()> {
+        self.rebind_at(crate::hotkey::SLOT_MAIN, spec)
+    }
+
+    /// 换绑指定槽位的组合。新组合注册失败时恢复旧的，不会把用户锁在外面。
+    pub fn rebind_at(&self, slot: usize, spec: &HotkeySpec) -> PlatformResult<()> {
         let next = HotKey::new(Some(to_gh_modifiers(spec.modifiers)), parse_code(&spec.key)?);
-        let previous = self.current.borrow_mut().take();
+        let mut slots = self.slots.borrow_mut();
+        if slots.len() <= slot {
+            slots.resize(slot + 1, None);
+        }
+        let previous = slots[slot].take();
 
         if let Some(old) = previous {
             if old == next {
-                *self.current.borrow_mut() = Some(old);
+                slots[slot] = Some(old);
                 return Ok(());
             }
             let _ = self.manager.unregister(old);
@@ -442,25 +454,35 @@ impl SystemHotkey {
 
         match self.manager.register(next) {
             Ok(()) => {
-                *self.current.borrow_mut() = Some(next);
+                slots[slot] = Some(next);
                 Ok(())
             }
             Err(e) => {
                 if let Some(old) = previous {
                     let _ = self.manager.register(old);
-                    *self.current.borrow_mut() = Some(old);
+                    slots[slot] = Some(old);
                 }
                 Err(PlatformError::Hotkey(e.to_string()))
             }
         }
     }
 
-    /// 返回本次是否有按键按下。会排空事件队列。
-    pub fn poll_pressed(&self) -> bool {
-        let mut pressed = false;
+    /// 返回本次被按下的槽位（没有则 `None`）。会排空事件队列。
+    ///
+    /// 一次排空里可能有多个热键事件（用户连按两下），取最后一个——
+    /// 和以前"只要有按下就算"的语义一致。
+    pub fn poll_pressed(&self) -> Option<usize> {
+        let slots = self.slots.borrow();
+        let mut pressed = None;
         while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-            if event.state == HotKeyState::Pressed {
-                pressed = true;
+            if event.state != HotKeyState::Pressed {
+                continue;
+            }
+            if let Some(slot) = slots
+                .iter()
+                .position(|h| h.as_ref().is_some_and(|h| h.id() == event.id()))
+            {
+                pressed = Some(slot);
             }
         }
         pressed

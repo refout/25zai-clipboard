@@ -66,13 +66,29 @@ fn dispatch(store: &dyn ClipboardStore, cmd: StoreCommand, evt: &Sender<StoreEve
             warn(&r, evt);
             let _ = reply.send(r);
         }
-        StoreCommand::Page { cursor, limit, reply } => {
-            let r = store.page(cursor, limit);
+        StoreCommand::InsertNote { text, reply } => {
+            let r = store.insert_note(&text);
+            if let Ok(Some(entry)) = &r {
+                let _ = evt.send(StoreEvent::Added(vec![entry.clone()]));
+            }
             warn(&r, evt);
             let _ = reply.send(r);
         }
-        StoreCommand::Search { query, limit, reply } => {
-            let r = store.search(&query, limit);
+        StoreCommand::UpdateNote { id, text, reply } => {
+            let r = store.update_note(id, &text);
+            if let Ok(Some(entry)) = &r {
+                let _ = evt.send(StoreEvent::Updated(entry.clone()));
+            }
+            warn(&r, evt);
+            let _ = reply.send(r);
+        }
+        StoreCommand::Page { scope, cursor, limit, reply } => {
+            let r = store.page(scope, cursor, limit);
+            warn(&r, evt);
+            let _ = reply.send(r);
+        }
+        StoreCommand::Search { scope, query, limit, reply } => {
+            let r = store.search(scope, &query, limit);
             warn(&r, evt);
             let _ = reply.send(r);
         }

@@ -59,6 +59,9 @@ pub mod meta_key {
     pub const CLEANUP_CURSOR: &str = "cleanup_cursor";
     /// 已分配的最大 last_used_at，用于抵御时钟回拨（不变量 I5）。
     pub const LAST_TS: &str = "last_ts";
+    /// 笔记条目数。笔记全是固定条目，不占 `NON_PINNED_COUNT`，
+    /// 但两个视图都要 `total_visible`，每次扫表数一遍太亏，单独记一个。
+    pub const NOTE_COUNT: &str = "note_count";
 }
 
 pub const CONFIG_KEY: &str = "config";
