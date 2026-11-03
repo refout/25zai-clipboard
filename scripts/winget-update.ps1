@@ -92,7 +92,7 @@ Tags:
   - productivity
   - privacy
 ReleaseNotesUrl: https://github.com/refout/25zai-clipboard/releases/tag/$tag
-ManifestType: locale
+ManifestType: defaultLocale
 ManifestVersion: 1.6.0
 "@
 
@@ -129,13 +129,13 @@ Write-Host "SHA256 = $sha"
 
 if ($Submit) {
   if (-not $Token) { throw "需要 -Token 或环境变量 WINGET_TOKEN" }
-  # 提交用干净目录：packaging/winget 里还有 README.md，wingetcreate 把它当清单解析会报
-  # "mapping values are not allowed in this context"。
+  # 提交用干净目录：wingetcreate 会把目录里所有文件当清单读（Directory.GetFiles），
+  # packaging/winget 里的 README.md 会让它报 YAML 解析错误。
+  # 另外 defaultLocale 那一份的 ManifestType 必须是 defaultLocale，写成 locale 会报
+  # "multi file manifest is incomplete"。
   $stage = Join-Path $env:TEMP ("winget-submit-" + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   Get-ChildItem $dir -Filter *.yaml | Copy-Item -Destination $stage
-  Write-Host ("提交目录: " + $stage)
-  Get-ChildItem $stage | ForEach-Object { Write-Host ("  " + $_.Name + " (" + $_.Length + "B)") }
   if (-not (Get-Command wingetcreate -ErrorAction SilentlyContinue)) {
     Write-Host '安装 wingetcreate...'
     Invoke-WebRequest 'https://aka.ms/wingetcreate/latest' -OutFile "$env:TEMP/wingetcreate.exe" -UseBasicParsing
