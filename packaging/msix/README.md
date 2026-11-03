@@ -5,14 +5,16 @@ Win32 程序上架 Store 只能走 MSIX（全信任打包）。`pack.ps1` 把
 
 ## 先准备
 
-Partner Center 保留应用名后，在「产品管理 → 产品标识」里拿三个值，填到仓库
-变量（Settings → Secrets and variables → Actions → Variables）：
+仓库变量（Settings → Secrets and variables → Actions → Variables）已填好，
+只有 `MSIX_PUBLISHER` 是占位值，必须换成 Partner Center 里的真实值：
 
-| 变量 | 例子 |
-|---|---|
-| `MSIX_IDENTITY_NAME` | `Refout.25zai` |
-| `MSIX_PUBLISHER` | `CN=1A2B3C4D-....` |
-| `MSIX_PUBLISHER_DISPLAY_NAME` | `refout` |
+| 变量 | 当前值 | 说明 |
+|---|---|---|
+| `MSIX_IDENTITY_NAME` | `Refout.25zai` | 保留应用名时自己起的「包名称」，须与 Partner Center 完全一致 |
+| `MSIX_PUBLISHER` | `CN=00000000-...`（占位） | Partner Center → 产品管理 → 产品标识 → Publisher，形如 `CN=1a2b3c4d-...` |
+| `MSIX_PUBLISHER_DISPLAY_NAME` | `refout` | 商店页显示的发布者名称 |
+
+`store` 工作流会拒绝占位值，避免打出一个 Publisher 不匹配、上传必被拒的包。 |
 
 ## 本地打包
 
