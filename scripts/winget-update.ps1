@@ -129,12 +129,17 @@ Write-Host "SHA256 = $sha"
 
 if ($Submit) {
   if (-not $Token) { throw "需要 -Token 或环境变量 WINGET_TOKEN" }
+  # 提交用干净目录：packaging/winget 里还有 README.md，wingetcreate 把它当清单解析会报
+  # "mapping values are not allowed in this context"。
+  $stage = Join-Path $env:TEMP ("winget-submit-" + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Force -Path $stage | Out-Null
+  Get-ChildItem $dir -Filter *.yaml | Copy-Item -Destination $stage
   if (-not (Get-Command wingetcreate -ErrorAction SilentlyContinue)) {
     Write-Host '安装 wingetcreate...'
     Invoke-WebRequest 'https://aka.ms/wingetcreate/latest' -OutFile "$env:TEMP/wingetcreate.exe" -UseBasicParsing
-    & "$env:TEMP/wingetcreate.exe" submit $dir --token $Token
+    & "$env:TEMP/wingetcreate.exe" submit $stage --token $Token
   } else {
-    wingetcreate submit $dir --token $Token
+    wingetcreate submit $stage --token $Token
   }
 } else {
   Write-Host '本地清单已更新。提交: wingetcreate submit packaging/winget --token <PAT>'

@@ -1,5 +1,5 @@
 PackageIdentifier: Refout.25zai
-PackageVersion: 0.1.2
+PackageVersion: 0.1.3
 InstallerLocale: zh-CN
 Platform:
   - Windows.Desktop
@@ -13,14 +13,14 @@ InstallModes:
 UpgradeBehavior: install
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/refout/25zai-clipboard/releases/download/v0.1.2/25zai-v0.1.2-windows-x64-setup.exe
-    InstallerSha256: A9176C3CD8585A2B75764F6A943AAACF97F4076A483BBB77230B5B5422145E74
+    InstallerUrl: https://github.com/refout/25zai-clipboard/releases/download/v0.1.3/25zai-v0.1.3-windows-x64-setup.exe
+    InstallerSha256: 7DDF0B9B07799994CB6437D01EE31D084F6E1339DCE8C2A87054F1C411E2C49E
     InstallerSwitches:
       Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
       SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART
     AppsAndFeaturesEntries:
       - DisplayName: 25仔
         Publisher: refout
-        DisplayVersion: 0.1.2
+        DisplayVersion: 0.1.3
 ManifestType: installer
 ManifestVersion: 1.6.0
