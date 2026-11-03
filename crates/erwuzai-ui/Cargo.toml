@@ -1,6 +1,6 @@
 [package]
 name = "erwuzai-ui"
-version = "0.1.0"
+version = "0.1.2"
 description = "25zai desktop shell (eframe/egui)"
 edition.workspace = true
 rust-version.workspace = true
