@@ -21,6 +21,7 @@ use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use erwuzai_core::{request_show, Paths, SingleInstance};
+use erwuzai_core::i18n::tr;
 use erwuzai_store::{
     CapturedItem, Payload, RedbStore, Remote, Reply, StoreCommand, StoreError, StoreHandle,
     StoreResult, StoreService,
@@ -287,6 +288,9 @@ fn run_ui() -> Result<(), AnyError> {
         .and_then(|r| r.ok())
         .unwrap_or_default();
 
+    // 在窗口起来之前定好语言，整棵 UI 树按它渲染。
+    erwuzai_core::i18n::set_lang(config.language.resolve(erwuzai_platform::system_language_is_chinese()));
+
     let (cmd, rx) = StoreCommand::page(None, 500);
     handle.submit(cmd);
     let page = rx
@@ -428,13 +432,13 @@ fn wait<T>(rx: Reply<T>) -> StoreResult<T> {
         .unwrap_or_else(|_| Err(StoreError::Remote("存储线程无响应".into())))
 }
 
-fn kind_of(kind: erwuzai_store::Kind) -> &'static str {
+fn kind_of(kind: erwuzai_store::Kind) -> String {
     use erwuzai_store::Kind;
     match kind {
-        Kind::Text => "文本",
-        Kind::RichText => "富文本",
-        Kind::Image => "图片",
-        Kind::FileList => "文件",
+        Kind::Text => tr("文本").to_string(),
+        Kind::RichText => tr("富文本").to_string(),
+        Kind::Image => tr("图片").to_string(),
+        Kind::FileList => tr("文件").to_string(),
     }
 }
 

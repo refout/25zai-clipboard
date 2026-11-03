@@ -848,6 +848,7 @@ name = "erwuzai-platform"
 version = "0.1.0"
 dependencies = [
  "clipboard-rs",
+ "erwuzai-core",
  "global-hotkey",
  "image",
  "muda",
@@ -861,6 +862,7 @@ name = "erwuzai-store"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "erwuzai-core",
  "postcard",
  "redb",
  "serde",

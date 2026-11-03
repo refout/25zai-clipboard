@@ -7,6 +7,37 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// UI 语言。`Auto` 跟系统区域：中文系统用中文，其它用英文。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Language {
+    /// 跟随系统（默认）。
+    #[default]
+    Auto,
+    /// 简体中文。
+    ZhCn,
+    /// 英文。
+    EnUs,
+}
+
+impl Language {
+    /// 解析成真正要用的语言。`Auto` 由调用方给一个是否中文系统的判断。
+    pub fn resolve(self, system_is_chinese: bool) -> erwuzai_core::i18n::Lang {
+        use erwuzai_core::i18n::Lang;
+        match self {
+            Language::Auto => {
+                if system_is_chinese {
+                    Lang::Zh
+                } else {
+                    Lang::En
+                }
+            }
+            Language::ZhCn => Lang::Zh,
+            Language::EnUs => Lang::En,
+        }
+    }
+}
+
 /// 条目 id。单调递增，删除后不复用。
 pub type EntryId = u64;
 
@@ -216,6 +247,10 @@ pub struct Config {
     /// 单条文本 / 路径列表上限，超出截断并标记 `truncated`。
     pub max_text_bytes: usize,
     pub hotkey: String,
+    /// 开机自动启动。守护进程在启动和配置变更时把它同步到系统里
+    /// （Windows 写 HKCU 的 Run 键）。默认开——剪贴板历史不常驻就没意义。
+    #[serde(default = "default_true")]
+    pub autostart: bool,
     /// 自定义托盘图标路径；`None` 用内置图标。
     pub tray_icon: Option<String>,
     /// 明亮 / 黑暗 / 跟随系统。
@@ -225,6 +260,9 @@ pub struct Config {
     /// 全局字号缩放，1.0 为标准。
     pub font_scale: f32,
     pub popup_position: PopupPosition,
+    /// UI 语言。`Auto` 跟系统区域。
+    #[serde(default)]
+    pub language: Language,
 }
 
 impl Default for Config {
@@ -240,12 +278,14 @@ impl Default for Config {
             paste_on_click: true,
             max_text_bytes: 1024 * 1024,
             hotkey: "Alt+V".to_string(),
+            autostart: true,
             tray_icon: None,
             theme: ThemeMode::System,
             // 和默认托盘图标同一个蓝，视觉上是一套
             accent: [58, 110, 165],
             font_scale: 1.0,
             popup_position: PopupPosition::Cursor,
+            language: Language::Auto,
         }
     }
 }
@@ -277,4 +317,26 @@ pub enum StoreEvent {
     ConfigChanged(Box<Config>),
     /// 非致命问题：通道丢弃、孤儿 blob、快捷键注册失败等。
     Warning(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 语言落在 config JSON 里，格式要稳定；老配置没有这个字段也得能读成 Auto。
+    #[test]
+    fn language_serde_roundtrip() {
+        for (lang, text) in [
+            (Language::Auto, "\"auto\""),
+            (Language::ZhCn, "\"zh-cn\""),
+            (Language::EnUs, "\"en-us\""),
+        ] {
+            assert_eq!(serde_json::to_string(&lang).unwrap(), text);
+            assert_eq!(serde_json::from_str::<Language>(text).unwrap(), lang);
+        }
+
+        // 缺字段时默认 Auto，不 panic。
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.language, Language::Auto);
+    }
 }

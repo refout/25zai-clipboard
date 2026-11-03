@@ -18,6 +18,24 @@ use crate::clipboard::{ClipboardBackend, RawClipboard, Watcher};
 use crate::hotkey::{HotkeyBackend, HotkeySpec, Modifiers};
 use crate::{PlatformError, PlatformResult};
 
+/// 系统 UI 语言是不是中文（含繁体）。用来把配置里的 Auto 解析成具体语言。
+pub fn system_language_is_chinese() -> bool {
+    #[cfg(windows)]
+    {
+        // 取主 UI 语言；中文（简体 0x804 / 繁体 0x404）低字节都是 0x04。
+        let lid = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
+        (lid & 0x00FF) == 0x04
+    }
+    #[cfg(not(windows))]
+    {
+        // 非 Windows 先按环境变量猜，猜不到就当英文。
+        match std::env::var("LANG") {
+            Ok(l) => l.contains("zh"),
+            Err(_) => false,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 剪贴板
 // ---------------------------------------------------------------------------

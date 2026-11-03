@@ -5,10 +5,11 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+use erwuzai_core::i18n::{tr, tr_fmt};
 use erwuzai_platform::{ClipboardBackend, HotkeySpec, SystemClipboard};
 use erwuzai_store::{
-    Config, Content, EntryId, EntryView, Kind, Page, PopupPosition, Reply, StoreCommand,
-    StoreEvent, StoreHandle, ThemeMode, UiRequest,
+    Config, Content, EntryId, EntryView, Kind, Language, Page, PopupPosition, Reply,
+    StoreCommand, StoreEvent, StoreHandle, ThemeMode, UiRequest,
 };
 
 use crate::listener;
@@ -85,11 +86,11 @@ impl SettingsTab {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Appearance => "外观",
-            Self::Behavior => "行为",
-            Self::Capacity => "容量",
-            Self::Trigger => "唤起",
-            Self::About => "关于",
+            Self::Appearance => tr("外观"),
+            Self::Behavior => tr("行为"),
+            Self::Capacity => tr("容量"),
+            Self::Trigger => tr("唤起"),
+            Self::About => tr("关于"),
         }
     }
 }
@@ -115,13 +116,13 @@ impl KindFilter {
         }
     }
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            KindFilter::All => "全部",
-            KindFilter::Text => "文本",
-            KindFilter::Rich => "富文本",
-            KindFilter::Image => "图片",
-            KindFilter::File => "文件",
+            KindFilter::All => tr("全部").to_string(),
+            KindFilter::Text => tr("文本").to_string(),
+            KindFilter::Rich => tr("富文本").to_string(),
+            KindFilter::Image => tr("图片").to_string(),
+            KindFilter::File => tr("文件").to_string(),
         }
     }
 }
@@ -145,7 +146,7 @@ pub struct App {
     scroll_to: Option<usize>,
     focus_requested: bool,
     started: Instant,
-    /// 本次唤出后是否真的拿到过焦点。没见过焦点就判定"失焦"会把自己立刻藏起来。
+    /// 本次唤出后是否真的拿到过焦点。没见过焦点就判定tr("失焦")会把自己立刻藏起来。
     seen_focus: bool,
     hide_on_blur: bool,
     /// 用户手动钉住窗口：失焦不隐藏。每次唤出重置，避免下次意外常驻。
@@ -153,7 +154,7 @@ pub struct App {
     /// 唤起前的前台窗口。点条目时把内容粘回去，就是粘进这个窗口。
     paste_target: isize,
     show_settings: bool,
-    /// 进程是被"打开设置"拉起来的：第一次 show 时直接进设置页。
+    /// 进程是被tr("打开设置")拉起来的：第一次 show 时直接进设置页。
     /// 只对第一次生效，之后再唤起回到列表。
     open_settings: bool,
     /// 首帧也要定位到光标，否则第一次出现还是屏幕中央。
@@ -348,7 +349,7 @@ impl App {
                     self.in_flight = None;
                 }
                 Ok(Err(e)) => {
-                    eprintln!("25zai: 搜索失败：{e}");
+                    eprintln!("{}", tr_fmt("25zai: 搜索失败：{}", &[&e]));
                     self.in_flight = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -383,12 +384,12 @@ impl App {
     }
 
     fn hide(&mut self, ctx: &egui::Context) {
-        // 钉住窗口时不接受任何"关闭"：失焦、Esc、点条目回放都不关。
+        // 钉住窗口时不接受任何tr("关闭")：失焦、Esc、点条目回放都不关。
         // 要关就先点顶栏图钉解除，或者走设置里的退出。
         if self.window_pinned {
             return;
         }
-        // 拆分之后"隐藏"就是退出整个 UI 进程——窗口留着只会继续占着一百多 MB。
+        // 拆分之后tr("隐藏")就是退出整个 UI 进程——窗口留着只会继续占着一百多 MB。
         self.visible = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -407,10 +408,10 @@ impl App {
         self.query.clear();
         self.selected = 0;
         self.focus_requested = false;
-        // 托盘"设置"拉起来的新进程：第一次 show 就落在设置页。
+        // 托盘tr("设置")拉起来的新进程：第一次 show 就落在设置页。
         self.show_settings = std::mem::take(&mut self.open_settings);
         self.window_pinned = false;
-        // 重新开始一轮"先拿到焦点、再谈失焦"的判定。
+        // 重新开始一轮tr("先拿到焦点、再谈失焦")的判定。
         self.seen_focus = false;
         self.started = Instant::now();
         self.visible = true;
@@ -431,7 +432,7 @@ impl App {
 
         // 全程用物理像素算：光标、工作区、窗口尺寸都来自 Win32，
         // 只有最后发命令时才换成逻辑点。混着用逻辑点算会踩到
-        // "第一帧的 pixels_per_point 还是旧显示器"的坑，窗口会偏一个缩放比。
+        // tr("第一帧的 pixels_per_point 还是旧显示器")的坑，窗口会偏一个缩放比。
         let Some((_, _, ww, wh)) = erwuzai_platform::window_rect("25zai") else {
             return;
         };
@@ -448,7 +449,7 @@ impl App {
         );
 
         // 记下物理目标：egui 的 OuterPosition 是逻辑点，多显示器 + 混合 DPI 下
-        // "调用时的缩放系数"和"真正应用时的"未必一致，整体会偏一个缩放比。
+        // tr("调用时的缩放系数")和tr("真正应用时的")未必一致，整体会偏一个缩放比。
         // 摆完再按真实矩形校准一次，比猜系数可靠。
         self.pending_pos = Some((pos.x.round() as i32, pos.y.round() as i32));
         self.place_attempts = 0;
@@ -555,20 +556,20 @@ impl App {
             raw = to_plain(raw);
         }
 
-        // 哈希必须基于"最终写进去的字节"，纯文本转换之后算。
+        // 哈希必须基于tr("最终写进去的字节")，纯文本转换之后算。
         let hash = listener::hash_raw(&raw);
         // 回声抑制的守卫在守护进程里（监听线程也在那边），这里只是通知它布防。
         self.handle.arm_echo(Some(hash));
         if let Err(e) = self.backend.write(&raw) {
             self.handle.arm_echo(None);
-            eprintln!("25zai: 写剪贴板失败：{e}");
+            eprintln!("{}", tr_fmt("25zai: 写剪贴板失败：{}", &[&e]));
             return;
         }
 
         let (cmd, _reply) = StoreCommand::touch(id);
         self.handle.submit(cmd);
         // 钉住时窗口不隐藏、焦点还在自己身上：得先把焦点借给目标窗口，
-        // 粘完再还回来，否则整窗就"失活"了，用户还得再点一下。
+        // 粘完再还回来，否则整窗就tr("失活")了，用户还得再点一下。
         let (paste_to, restore) = if self.config.paste_on_click {
             let restore = if self.window_pinned && erwuzai_platform::foreground_is_ours() {
                 erwuzai_platform::foreground_window()
@@ -596,14 +597,14 @@ impl App {
                 self.config.hotkey = text;
                 self.config_dirty = true;
             }
-            Err(e) => self.hotkey_error = Some(format!("注册失败：{e}")),
+            Err(e) => self.hotkey_error = Some(tr_fmt("注册失败：{}", &[&e])),
         }
     }
 
-    /// 录键模式：截获下一次"非修饰键"的按下，直接组合成快捷键。
+    /// 录键模式：截获下一次tr("非修饰键")的按下，直接组合成快捷键。
     ///
     /// Ctrl / Shift / Alt 本身也会作为 `Event::Key` 出现（ShiftLeft、ControlRight…），
-    /// 必须跳过，否则按下 Ctrl 的瞬间就被当成"你选了 Ctrl 这个键"。
+    /// 必须跳过，否则按下 Ctrl 的瞬间就被当成tr("你选了 Ctrl 这个键")。
     fn capture_hotkey(&mut self, ctx: &egui::Context) {
         if !self.recording {
             return;
@@ -654,7 +655,7 @@ impl App {
             mods |= erwuzai_platform::Modifiers::SHIFT;
         }
         if mods.is_empty() {
-            self.hotkey_error = Some("必须带 Ctrl / Alt / Shift".to_string());
+            self.hotkey_error = Some(tr("必须带 Ctrl / Alt / Shift").to_string());
             return;
         }
 
@@ -677,7 +678,7 @@ impl App {
         let a = self.config.accent;
         let accent = egui::Color32::from_rgb(a[0], a[1], a[2]);
         let scale = self.config.font_scale.clamp(0.8, 1.6);
-        // 以 egui 默认字号为基准，避免"改两次字号翻两倍"。
+        // 以 egui 默认字号为基准，避免tr("改两次字号翻两倍")。
         let base = egui::Style::default().text_styles;
 
 
@@ -688,7 +689,7 @@ impl App {
                 style.visuals.hyperlink_color = accent;
                 style.visuals.widgets.active.bg_fill = accent;
 
-                // egui 0.37 的默认弱化色是"正文色 × 0.6 的透明度"：
+                // egui 0.37 的默认弱化色是tr("正文色 × 0.6 的透明度")：
                 // 深色下算出来接近 #3F3F3F，压在 #1B1B1B 的面板上基本看不见。
                 //
                 // 文字一律中性色，不掺主题色：彩色文字看久了会脏，
@@ -717,11 +718,11 @@ impl App {
     fn settings_panel(&mut self, ui: &mut egui::Ui) {
         // 顶栏固定：标题 + 返回。
         inset_right(ui, |ui| ui.horizontal(|ui| {
-            ui.heading("设置");
+            ui.heading(tr("设置"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // 和列表页的“设置”按钮同尺寸，来回切换时不会跳高矮。
                 if ui
-                    .add_sized([48.0, 28.0], egui::Button::new("返回"))
+                    .add_sized([48.0, 28.0], egui::Button::new(tr("返回")))
                     .clicked()
                 {
                     self.show_settings = false;
@@ -748,7 +749,7 @@ impl App {
         ui.add_space(4.0);
         inset_right(ui, |ui| ui.separator());
 
-        // 中间可滚动，底部动作区固定——否则小窗口里"退出"永远看不到。
+        // 中间可滚动，底部动作区固定——否则小窗口里tr("退出")永远看不到。
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -764,15 +765,15 @@ impl App {
 
         inset_right(ui, |ui| ui.separator());
         inset_right(ui, |ui| ui.horizontal(|ui| {
-            if ui.button("清空历史").clicked() {
+            if ui.button(tr("清空历史")).clicked() {
                 let (cmd, _reply) = StoreCommand::clear_unpinned();
                 self.handle.submit(cmd);
                 self.show_settings = false;
                 self.query.clear();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("退出 25仔").clicked() {
-                    // 守护进程才是"25仔"本身，光关窗口等于只是藏起来。
+                if ui.button(tr("退出 25仔")).clicked() {
+                    // 守护进程才是tr("25仔")本身，光关窗口等于只是藏起来。
                     self.handle.quit();
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -798,11 +799,11 @@ impl App {
                 );
             }
             ui.add_space(10.0);
-            ui.heading("25仔");
+            ui.heading(tr("25仔"));
             ui.add_space(2.0);
-            ui.weak(format!("版本 {}", env!("CARGO_PKG_VERSION")));
+            ui.weak(tr_fmt("版本 {}", &[&env!("CARGO_PKG_VERSION")]));
             ui.add_space(6.0);
-            ui.weak("剪贴板历史，本地存储，随时唤起。");
+            ui.weak(tr("剪贴板历史，本地存储，随时唤起。"));
         });
 
         ui.add_space(16.0);
@@ -812,19 +813,19 @@ impl App {
             .num_columns(2)
             .spacing([16.0, 8.0])
             .show(ui, |ui| {
-                ui.label("快捷键");
+                ui.label(tr("快捷键"));
                 ui.weak(self.config.hotkey.clone());
                 ui.end_row();
 
-                ui.label("历史条目");
-                ui.weak(format!("{} 条", self.total_visible));
+                ui.label(tr("历史条目"));
+                ui.weak(tr_fmt("{} 条", &[&self.total_visible]));
                 ui.end_row();
 
-                ui.label("数据");
-                ui.weak("只存在本机（redb + 图片文件），不上传");
+                ui.label(tr("数据"));
+                ui.weak(tr("只存在本机（redb + 图片文件），不上传"));
                 ui.end_row();
 
-                ui.label("许可证");
+                ui.label(tr("许可证"));
                 ui.weak("MIT");
                 ui.end_row();
             });
@@ -836,12 +837,12 @@ impl App {
             .spacing([12.0, 8.0])
             .min_col_width(60.0)
             .show(ui, |ui| {
-                ui.label("主题");
+                ui.label(tr("主题"));
                 ui.horizontal(|ui| {
                     for (mode, label) in [
-                        (ThemeMode::System, "跟随系统"),
-                        (ThemeMode::Light, "明亮"),
-                        (ThemeMode::Dark, "黑暗"),
+                        (ThemeMode::System, tr("跟随系统")),
+                        (ThemeMode::Light, tr("明亮")),
+                        (ThemeMode::Dark, tr("黑暗")),
                     ] {
                         if ui.selectable_label(self.config.theme == mode, label).clicked() {
                             self.config.theme = mode;
@@ -852,7 +853,7 @@ impl App {
                 });
                 ui.end_row();
 
-                ui.label("主题色");
+                ui.label(tr("主题色"));
                 ui.horizontal(|ui| {
                     let mut accent = self.config.accent;
                     if ui.color_edit_button_srgb(&mut accent).changed() {
@@ -867,9 +868,9 @@ impl App {
                 });
                 ui.end_row();
 
-                ui.label("字号");
+                ui.label(tr("字号"));
                 ui.horizontal(|ui| {
-                    for (scale, label) in [(0.9_f32, "小"), (1.0, "标准"), (1.15, "大")] {
+                    for (scale, label) in [(0.9_f32, tr("小")), (1.0, tr("标准")), (1.15, tr("大"))] {
                         let selected = (self.config.font_scale - scale).abs() < 0.01;
                         if ui.selectable_label(selected, label).clicked() {
                             self.config.font_scale = scale;
@@ -879,42 +880,73 @@ impl App {
                     }
                 });
                 ui.end_row();
+
+                ui.label(tr("语言"));
+                ui.horizontal(|ui| {
+                    for (lang, label) in [
+                        (Language::Auto, tr("跟随系统")),
+                        (Language::ZhCn, "简体中文"),
+                        (Language::EnUs, "English"),
+                    ] {
+                        if ui
+                            .selectable_label(self.config.language == lang, label)
+                            .clicked()
+                        {
+                            self.config.language = lang;
+                            self.config_dirty = true;
+                            // 立刻生效：tr() 每帧现读全局语言，下一帧就全切过去了。
+                            erwuzai_core::i18n::set_lang(
+                                lang.resolve(erwuzai_platform::system_language_is_chinese()),
+                            );
+                        }
+                    }
+                });
+                ui.end_row();
             });
     }
 
     fn behavior_section(&mut self, ui: &mut egui::Ui) {
         if ui
-            .checkbox(&mut self.config.replay_reorders, "回放后排到第一")
+            .checkbox(&mut self.config.replay_reorders, tr("回放后排到第一"))
             .changed()
         {
             self.config_dirty = true;
         }
         if ui
-            .checkbox(&mut self.config.replay_as_plain, "回放只保留纯文本")
+            .checkbox(&mut self.config.replay_as_plain, tr("回放只保留纯文本"))
             .changed()
         {
             self.config_dirty = true;
         }
-        ui.weak("也可以回放时按 Shift+Enter 临时生效");
+        ui.weak(tr("也可以回放时按 Shift+Enter 临时生效"));
 
         if ui
-            .checkbox(&mut self.config.paste_on_click, "点条目后直接粘贴到光标处")
+            .checkbox(&mut self.config.paste_on_click, tr("点条目后直接粘贴到光标处"))
             .changed()
         {
             self.config_dirty = true;
         }
-        ui.weak("关闭则只把内容放回剪贴板，等你自己按 Ctrl+V");
+        ui.weak(tr("关闭则只把内容放回剪贴板，等你自己按 Ctrl+V"));
+
+        ui.add_space(8.0);
+        if ui
+            .checkbox(&mut self.config.autostart, tr("开机自动启动（后台常驻）"))
+            .changed()
+        {
+            self.config_dirty = true;
+        }
+        ui.weak(tr("用 --daemon 拉起守护进程，不弹窗；改动会同步到系统的启动项"));
 
         ui.add_space(6.0);
         if ui
-            .checkbox(&mut self.config.skip_sensitive, "跳过疑似密钥")
+            .checkbox(&mut self.config.skip_sensitive, tr("跳过疑似密钥"))
             .changed()
         {
             self.config_dirty = true;
         }
 
         ui.add_space(8.0);
-        ui.label("排除应用（逗号分隔）");
+        ui.label(tr("排除应用（逗号分隔）"));
         let mut apps = self.config.excluded_apps.join(", ");
         if ui
             .add_sized(
@@ -939,10 +971,10 @@ impl App {
             .spacing([12.0, 8.0])
             .min_col_width(60.0)
             .show(ui, |ui| {
-                ui.label("条数上限");
+                ui.label(tr("条数上限"));
                 let mut limit = self.config.limit as u32;
                 if ui
-                    .add(egui::Slider::new(&mut limit, 100..=5000).suffix(" 条"))
+                    .add(egui::Slider::new(&mut limit, 100..=5000).suffix(tr(" 条")))
                     .changed()
                 {
                     self.config.limit = limit as usize;
@@ -950,17 +982,17 @@ impl App {
                 }
                 ui.end_row();
 
-                ui.label("时间清理");
+                ui.label(tr("时间清理"));
                 ui.horizontal(|ui| {
                     let mut retention = self.config.retention_days;
                     let mut enabled = retention.is_some();
-                    if ui.checkbox(&mut enabled, "启用").changed() {
+                    if ui.checkbox(&mut enabled, tr("启用")).changed() {
                         retention = if enabled { Some(30) } else { None };
                         self.config_dirty = true;
                     }
                     if let Some(days) = retention.as_mut() {
                         if ui
-                            .add(egui::Slider::new(days, 1..=365).suffix(" 天"))
+                            .add(egui::Slider::new(days, 1..=365).suffix(tr(" 天")))
                             .changed()
                         {
                             self.config_dirty = true;
@@ -970,7 +1002,7 @@ impl App {
                 });
                 ui.end_row();
             });
-        ui.weak("固定条目既不计入上限，也不会被清理");
+        ui.weak(tr("固定条目既不计入上限，也不会被清理"));
     }
 
     fn trigger_section(&mut self, ui: &mut egui::Ui) {
@@ -979,10 +1011,10 @@ impl App {
             .spacing([12.0, 8.0])
             .min_col_width(60.0)
             .show(ui, |ui| {
-                ui.label("快捷键");
+                ui.label(tr("快捷键"));
                 ui.horizontal(|ui| {
                     let label = if self.recording {
-                        "按下组合键…".to_string()
+                        tr("按下组合键…").to_string()
                     } else {
                         self.config.hotkey.clone()
                     };
@@ -994,18 +1026,18 @@ impl App {
                         self.hotkey_error = None;
                     }
                     ui.weak(if self.recording {
-                        "按 Esc 取消"
+                        tr("按 Esc 取消")
                     } else {
-                        "点击后按下新组合"
+                        tr("点击后按下新组合")
                     });
                 });
                 ui.end_row();
 
-                ui.label("弹出位置");
+                ui.label(tr("弹出位置"));
                 ui.horizontal(|ui| {
                     for (mode, label) in [
-                        (PopupPosition::Cursor, "跟随光标"),
-                        (PopupPosition::Center, "居中"),
+                        (PopupPosition::Cursor, tr("跟随光标")),
+                        (PopupPosition::Center, tr("居中")),
                     ] {
                         if ui
                             .selectable_label(self.config.popup_position == mode, label)
@@ -1018,7 +1050,7 @@ impl App {
                 });
                 ui.end_row();
 
-                ui.label("托盘图标");
+                ui.label(tr("托盘图标"));
                 ui.horizontal(|ui| {
                     let current = self
                         .config
@@ -1026,18 +1058,18 @@ impl App {
                         .as_deref()
                         .and_then(|p| Path::new(p).file_name())
                         .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "默认".to_string());
+                        .unwrap_or_else(|| tr("默认").to_string());
                     ui.weak(current);
-                    if ui.button("选择…").clicked() {
+                    if ui.button(tr("选择…")).clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("图片", &["png", "jpg", "jpeg", "ico", "bmp"])
+                            .add_filter(tr("图片"), &["png", "jpg", "jpeg", "ico", "bmp"])
                             .pick_file()
                         {
                             self.config.tray_icon = Some(path.to_string_lossy().into_owned());
                             self.config_dirty = true;
                         }
                     }
-                    if self.config.tray_icon.is_some() && ui.button("恢复").clicked() {
+                    if self.config.tray_icon.is_some() && ui.button(tr("恢复")).clicked() {
                         self.config.tray_icon = None;
                         self.config_dirty = true;
                     }
@@ -1083,7 +1115,7 @@ impl eframe::App for App {
         }
 
         // 托盘右键是 Win32 原生菜单，只认进程级的深色标记，不会跟着 egui 的主题走。
-        // 主题可能在运行中变（设置里切，或者"跟随系统"时系统自己切），这里每帧
+        // 主题可能在运行中变（设置里切，或者tr("跟随系统")时系统自己切），这里每帧
         // 比一下，变了才去调 uxtheme——那两个是未公开接口，能少调就少调。
         let menu_dark = ui.style().visuals.dark_mode;
         if self.menu_dark != Some(menu_dark) {
@@ -1113,7 +1145,7 @@ impl eframe::App for App {
         }
 
         // 关键顺序：`Visible(true)` / `Focus` 是帧末才生效的，唤出后的一两帧里
-        // `focused` 仍是 false。必须先确认"曾经拿到过焦点"，否则每次唤出都会闪一下。
+        // `focused` 仍是 false。必须先确认tr("曾经拿到过焦点")，否则每次唤出都会闪一下。
         if ctx.input(|i| i.focused) {
             self.seen_focus = true;
         }
@@ -1241,7 +1273,7 @@ impl App {
                 let response = ui.add_sized(
                     [width, 28.0],
                     egui::TextEdit::singleline(&mut self.query)
-                        .hint_text("搜索剪贴板历史")
+                        .hint_text(tr("搜索剪贴板历史"))
                         .align(egui::Align2::LEFT_CENTER)
                         .margin(egui::Margin::symmetric(8, 5)),
                 );
@@ -1255,7 +1287,7 @@ impl App {
                 }
                 // 和搜索框同高（28），否则默认按钮高度会让整行看起来高低不齐。
                 if ui
-                    .add_sized([48.0, 28.0], egui::Button::new("设置"))
+                    .add_sized([48.0, 28.0], egui::Button::new(tr("设置")))
                     .clicked()
                 {
                     self.show_settings = true;
@@ -1285,13 +1317,13 @@ impl App {
                     let current = self
                         .source_filter
                         .clone()
-                        .unwrap_or_else(|| "全部来源".to_string());
+                        .unwrap_or_else(|| tr("全部来源").to_string());
                     egui::ComboBox::from_id_salt("source-filter")
                         .selected_text(current)
                         .width(120.0)
                         .show_ui(ui, |ui| {
                             if ui
-                                .selectable_label(self.source_filter.is_none(), "全部来源")
+                                .selectable_label(self.source_filter.is_none(), tr("全部来源"))
                                 .clicked()
                             {
                                 self.source_filter = None;
@@ -1322,9 +1354,9 @@ impl App {
                 ui.add_space(24.0);
                 ui.vertical_centered(|ui| {
                     ui.weak(if self.entries.is_empty() {
-                        "还没有历史。复制点什么试试。"
+                        tr("还没有历史。复制点什么试试。")
                     } else {
-                        "没有匹配的条目"
+                        tr("没有匹配的条目")
                     });
                 });
                 return;
@@ -1463,10 +1495,9 @@ impl App {
             if show_footer {
                 ui.add_space(2.0);
                 inset_right(ui, |ui| {
-                    ui.weak(format!(
+                    ui.weak(tr_fmt(
                         "共 {} 条，当前显示 {} 条（继续输入可全量搜索）",
-                        self.total_visible,
-                        rows.len()
+                        &[&self.total_visible, &rows.len()],
                     ));
                 });
             }
@@ -1474,7 +1505,7 @@ impl App {
 
         if let Some((id, pinned)) = toggle_pin {
             // 存储层只写库、不回推事件，本地必须先改一份：否则右键钉住之后
-            // 星标不出现、顺序也不动，看起来就像"这个功能根本没生效"。
+            // 星标不出现、顺序也不动，看起来就像tr("这个功能根本没生效")。
             if let Some(view) = self.entries.iter_mut().find(|e| e.entry.id == id) {
                 view.entry.pinned = pinned;
             }
@@ -1552,7 +1583,7 @@ fn place_in_work_area(
     )
 }
 
-/// 修饰键本身不该被当成"用户选的键"。
+/// 修饰键本身不该被当成tr("用户选的键")。
 fn is_modifier_key(key: egui::Key) -> bool {
     use egui::Key;
     matches!(
@@ -1618,9 +1649,9 @@ fn pin_toggle_button(ui: &mut egui::Ui, pinned: bool) -> egui::Response {
     };
     paint_pin(ui.painter(), rect.center(), color, 1.25);
     response.on_hover_text(if pinned {
-        "取消钉住，恢复失焦自动隐藏"
+        tr("取消钉住，恢复失焦自动隐藏")
     } else {
-        "钉住窗口：失焦、点条目、Esc 都不会关闭"
+        tr("钉住窗口：失焦、点条目、Esc 都不会关闭")
     })
 }
 
@@ -1642,7 +1673,7 @@ fn paint_thumbnail(ui: &mut egui::Ui, texture: &egui::TextureHandle) {
     let tex = texture.size_vec2();
     let scale = (rect.width() / tex.x).max(rect.height() / tex.y);
     let fitted = tex * scale;
-    // 只取中间那一块，UV 宽度就是"框 / 放大后的图"。
+    // 只取中间那一块，UV 宽度就是tr("框 / 放大后的图")。
     let uv = egui::Rect::from_center_size(
         egui::pos2(0.5, 0.5),
         egui::vec2(
@@ -1689,9 +1720,9 @@ fn entry_pin_button(ui: &mut egui::Ui, pinned: bool, selected: bool) -> egui::Re
     }
 
     response.on_hover_text(if pinned {
-        "取消钉住"
+        tr("取消钉住")
     } else {
-        "钉住这条：不会被清理，并排在最前"
+        tr("钉住这条：不会被清理，并排在最前")
     })
 }
 
@@ -1734,14 +1765,14 @@ mod tests {
     #[test]
     fn rich_content_can_be_downgraded_end_to_end() {
         let content = Content::RichText {
-            plain: "带格式的句子".into(),
-            html: Some("<b>带格式的句子</b>".into()),
+            plain: tr("带格式的句子").into(),
+            html: Some(tr("<b>带格式的句子</b>").into()),
         };
         let raw = content_to_raw(content).expect("rich content converts");
         assert!(matches!(raw, RawClipboard::Rich { .. }));
 
         match to_plain(raw) {
-            RawClipboard::Text(t) => assert_eq!(t, "带格式的句子"),
+            RawClipboard::Text(t) => assert_eq!(t, tr("带格式的句子")),
             other => panic!("expected Text, got {other:?}"),
         }
     }

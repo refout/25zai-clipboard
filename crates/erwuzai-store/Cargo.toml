@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+erwuzai-core = { path = "../erwuzai-core" }
 redb.workspace = true
 blake3.workspace = true
 serde.workspace = true

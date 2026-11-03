@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use erwuzai_core::i18n::tr;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -31,9 +32,9 @@ impl SystemTray {
     /// `icon_path` 为空或读取失败时用内置图标。
     pub fn new(tooltip: &str, icon_path: Option<&Path>) -> PlatformResult<Self> {
         let menu = Menu::new();
-        let show = MenuItem::new("显示历史", true, None);
-        let settings = MenuItem::new("设置", true, None);
-        let quit = MenuItem::new("退出 25仔", true, None);
+        let show = MenuItem::new(tr("显示历史"), true, None);
+        let settings = MenuItem::new(tr("设置"), true, None);
+        let quit = MenuItem::new(tr("退出 25仔"), true, None);
         let separator = PredefinedMenuItem::separator();
 
         menu.append(&show).map_err(to_err)?;

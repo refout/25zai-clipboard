@@ -8,3 +8,5 @@ pub mod paths;
 
 pub use instance::{request_show, InstanceError, ShowServer, SingleInstance};
 pub use paths::Paths;
+
+pub mod i18n;

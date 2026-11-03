@@ -8,6 +8,7 @@
 //! 这一层**不认识存储层的类型**。监听侧产出 [`RawClipboard`]，
 //! 由应用层转换成 `CapturedItem` 再入库。
 
+pub mod autostart;
 pub mod clipboard;
 pub mod echo;
 pub mod hotkey;
@@ -24,7 +25,10 @@ pub use hotkey::{HotkeyBackend, HotkeySpec, Modifiers};
 pub use input::{foreground_is_ours, foreground_window, paste_into};
 pub use menu::set_menu_dark_mode;
 pub use source::{NoSourceApp, SourceAppResolver};
-pub use system::{cursor_placement, CursorPlacement, SystemClipboard, SystemHotkey, SystemSourceApp};
+pub use system::{
+    cursor_placement, system_language_is_chinese, CursorPlacement, SystemClipboard, SystemHotkey,
+    SystemSourceApp,
+};
 pub use tray::{SystemTray, TrayEvent};
 pub use window::{pump_messages, window_rect};
 

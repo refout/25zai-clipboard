@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use erwuzai_core::i18n::tr;
 use erwuzai_core::{InstanceError, Paths, SingleInstance};
 use erwuzai_platform::{
     pump_messages, set_menu_dark_mode, EchoGuard, HotkeyBackend, HotkeySpec, SystemHotkey,
@@ -75,6 +76,18 @@ pub fn run() -> Result<(), AnyError> {
         Err(e) => eprintln!("25zai: 清理孤儿 blob 失败：{e}"),
     }
     let config = store.config()?;
+    // 语言要在建托盘之前定好——托盘菜单文字是这会儿取的。
+    erwuzai_core::i18n::set_lang(
+        config
+            .language
+            .resolve(erwuzai_platform::system_language_is_chinese()),
+    );
+    // 自启是"系统状态"，不是库里的数据：每次启动都按配置对齐一次，
+    // 用户手工删了注册表值也会被补回来。
+    let exe = std::env::current_exe()?;
+    if let Err(e) = erwuzai_platform::autostart::set_enabled(config.autostart, &exe) {
+        eprintln!("25zai: 设置开机自启失败：{e}");
+    }
     let page = store.page(None, 1)?;
     println!("loaded {} entries from {}", page.total_visible, paths.db().display());
 
@@ -91,7 +104,7 @@ pub fn run() -> Result<(), AnyError> {
     let mut hotkey = register_hotkey(&config.hotkey);
     let (hotkey_tx, hotkey_rx) = std::sync::mpsc::channel::<HotkeyJob>();
     let tray = match SystemTray::new(
-        "25仔 — 剪贴板历史",
+        tr("25仔 — 剪贴板历史"),
         config.tray_icon.as_deref().map(std::path::Path::new),
     ) {
         Ok(tray) => {
@@ -115,7 +128,7 @@ pub fn run() -> Result<(), AnyError> {
         hotkey_tx,
         ui: Arc::new(Mutex::new(None)),
         quit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        exe: std::env::current_exe()?,
+        exe,
     };
 
     // 存储事件 → 当前 UI。没有 UI 连接时直接丢掉（下次连上会拿全量首屏）。
@@ -135,6 +148,12 @@ pub fn run() -> Result<(), AnyError> {
                             *slot = cfg.tray_icon.clone();
                         }
                         tray_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+                        // 自启开关是 UI 改的、守护进程执行的。
+                        if let Err(e) =
+                            erwuzai_platform::autostart::set_enabled(cfg.autostart, &ctx.exe)
+                        {
+                            eprintln!("25zai: 设置开机自启失败：{e}");
+                        }
                     }
                     ctx.send_to_ui(&Msg::Evt(evt));
                 }
