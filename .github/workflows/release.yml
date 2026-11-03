@@ -53,12 +53,50 @@ jobs:
           & $iscc "/DAppVersion=$version" "/DOutputBase=$name-setup" ".github/installer/25zai.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC 失败（退出码 $LASTEXITCODE）" }
 
-          # 两个包一起算校验和
-          $sums = Get-ChildItem dist -File | Where-Object { $_.Extension -in '.zip', '.exe' } | ForEach-Object {
+          "PKG_NAME=$name" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PKG_VERSION=$version" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # 上架 Microsoft Store 用的 MSIX：和 exe 一起随 Release 发布，
+      # 上传 Partner Center 时直接从这里下载。
+      - name: 打包 MSIX
+        shell: pwsh
+        env:
+          IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          if (-not $env:IDENTITY_NAME -or -not $env:PUBLISHER -or -not $env:PUBLISHER_DISPLAY_NAME) {
+            throw "缺少仓库变量 MSIX_IDENTITY_NAME / MSIX_PUBLISHER / MSIX_PUBLISHER_DISPLAY_NAME"
+          }
+          if ($env:PUBLISHER -match '^CN=0{8}-0{4}-0{4}-0{4}-0{12}') {
+            throw "MSIX_PUBLISHER 仍是占位值。去 Partner Center → 产品管理 → 产品标识复制 Publisher。"
+          }
+          ./packaging/msix/pack.ps1 -IdentityName $env:IDENTITY_NAME -Publisher $env:PUBLISHER -PublisherDisplayName $env:PUBLISHER_DISPLAY_NAME -Version $env:PKG_VERSION
+
+      # Store 上传不需要签名（微软会重签），自签只是让包能被 sideload 验证。
+      - name: 签名 MSIX
+        shell: pwsh
+        env:
+          PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+        run: |
+          $msix = Get-ChildItem dist/*.msix | Select-Object -First 1
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $env:PUBLISHER -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -NotAfter (Get-Date).AddYears(2)
+          $pwd = ConvertTo-SecureString 'store' -Force -AsPlainText
+          $pfx = Join-Path $env:RUNNER_TEMP 'sign.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pwd | Out-Null
+          $pf86 = [Environment]::GetFolderPath('ProgramFilesX86')
+          $sdk = Get-ChildItem (Join-Path $pf86 'Windows Kits/10/bin') -Directory |
+            Where-Object { $_.Name -match '^[0-9]+[.]' } | Sort-Object Name -Descending | Select-Object -First 1
+          & (Join-Path $sdk.FullName 'x64/signtool.exe') sign /fd SHA256 /f $pfx /p store $msix.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signtool 失败（$LASTEXITCODE）" }
+
+      - name: 校验和
+        shell: pwsh
+        run: |
+          $sums = Get-ChildItem dist -File | Where-Object { $_.Extension -in '.zip', '.exe', '.msix' } | ForEach-Object {
             (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name
           }
           $sums | Set-Content -Encoding ascii "dist/SHA256SUMS.txt"
-          "PKG_NAME=$name" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
@@ -66,6 +104,7 @@ jobs:
           path: |
             dist/*.zip
             dist/*-setup.exe
+            dist/*.msix
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -79,6 +118,7 @@ jobs:
           files: |
             dist/*.zip
             dist/*-setup.exe
+            dist/*.msix
             dist/SHA256SUMS.txt
           generate_release_notes: true
           draft: false

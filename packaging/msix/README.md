@@ -15,7 +15,7 @@ Win32 程序上架 Store 只能走 MSIX（全信任打包）。`pack.ps1` 把
 | `MSIX_PUBLISHER_DISPLAY_NAME` | `refout` | Package/Properties/PublisherDisplayName，商店页显示的发布者 |
 
 注意 Identity Name **不是** `refout.25zai`：前缀跟发布者显示名称无关，填错会被拒包。
-`store` 工作流会拒绝占位值，避免打出一个 Publisher 不匹配、上传必被拒的包。
+发版时 `release.yml` 会拒绝占位值，避免打出一个 Publisher 不匹配、上传必被拒的包。
 
 产品标识全貌（用于核对，PFN / Store ID 不进清单）：
 
@@ -34,7 +34,7 @@ cargo build --release -p erwuzai-ui
 ./packaging/msix/pack.ps1 -IdentityName 2169HaleWang.25zai -Publisher 'CN=0D4B9868-9F65-4FEB-980D-79CCAE83C901' -PublisherDisplayName refout -Version 0.1.2
 ```
 
-产物在 `dist/25zai-<版本>-windows-x64.msix`。CI 里 `store.yml` 会顺手用自签证书
+产物在 `dist/25zai-<版本>-windows-x64.msix`。发版时 `release.yml` 会顺手用自签证书
 签名（Store 会用微软证书重签，自签只要 Subject 等于 Publisher 即可）。
 
 ## 两个必踩的坑（MakeAppx 报错是本地化的，经常只显示问号）
@@ -48,10 +48,13 @@ cargo build --release -p erwuzai-ui
 
 ## 上架流程
 
-1. 跑 `store` 工作流（或本地打包），下载 `.msix`
-2. Partner Center → 提交 → 上传包
-3. 填商店信息：截图（≥1 张，1366×768 以上）、描述、**隐私政策 URL**
-4. 年龄分级问卷（IARC）→ 提交认证
+MSIX 跟 exe 一起随 Release 发布，不用单独跑流水线：
+
+1. 打 tag 发版（`release.yml` 自动打包 + 自签 + 上传到 Release）
+2. 从 Releases 页面下载 `25zai-<版本>-windows-x64.msix`
+3. Partner Center → 提交 → 上传包
+4. 填商店信息：截图（≥1 张，1366×768 以上）、描述、**隐私政策 URL**
+5. 年龄分级问卷（IARC）→ 提交认证
 
 ## 审核注意
 
