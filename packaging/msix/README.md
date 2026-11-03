@@ -53,7 +53,8 @@ MSIX 跟 exe 一起随 Release 发布，不用单独跑流水线：
 1. 打 tag 发版（`release.yml` 自动打包 + 自签 + 上传到 Release）
 2. 从 Releases 页面下载 `25zai-<版本>-windows-x64.msix`
 3. Partner Center → 提交 → 上传包
-4. 填商店信息：截图（≥1 张，1366×768 以上）、描述、**隐私政策 URL**
+4. 填商店信息：截图（≥1 张，1366×768 以上）、描述、隐私政策 URL
+   `https://refout.github.io/25zai-clipboard/privacy.html`
 5. 年龄分级问卷（IARC）→ 提交认证
 
 ## 审核注意

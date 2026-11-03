@@ -3,6 +3,7 @@
 [![ci](https://github.com/refout/25zai-clipboard/actions/workflows/ci.yml/badge.svg)](https://github.com/refout/25zai-clipboard/actions/workflows/ci.yml)
 [![release](https://github.com/refout/25zai-clipboard/actions/workflows/release.yml/badge.svg)](https://github.com/refout/25zai-clipboard/actions/workflows/release.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![site](https://img.shields.io/badge/site-refout.github.io-blue.svg)](https://refout.github.io/25zai-clipboard/)
 
 > Featherweight clipboard memory for every desktop.
 
