@@ -69,10 +69,13 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
 
+      # 用 PAT 建 Release：GITHUB_TOKEN 建出来的 Release 不会再触发别的 workflow，
+      # winget.yml 的 release: published 就会永远等不到。没配 PAT 时退回默认 token（只是不自动发 winget）。
       - name: publish
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.WINGET_TOKEN || github.token }}
           files: |
             dist/*.zip
             dist/*-setup.exe
