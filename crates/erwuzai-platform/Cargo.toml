@@ -1,6 +1,6 @@
 [package]
 name = "erwuzai-platform"
-version = "0.2.1"
+version = "0.2.2"
 description = "25zai platform boundary: clipboard, hotkey, source app, echo suppression"
 edition.workspace = true
 rust-version.workspace = true
