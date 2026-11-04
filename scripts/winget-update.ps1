@@ -43,6 +43,10 @@ ManifestType: version
 ManifestVersion: 1.6.0
 "@
 
+# AppsAndFeaturesEntries.DisplayName 必须与安装器写进 ARP 的名字逐字相同：
+# winget 的安装验证就是靠它去认产品，对不上会报 Validation-Executable-Error
+# （找不到主应用程序）。安装器那边由 25zai.iss 的 UninstallDisplayName 固定成
+# 「25仔」，不带版本号，所以这里也不要拼 $Version。
 $installerBody = @"
 PackageIdentifier: Refout.25zai
 PackageVersion: $Version

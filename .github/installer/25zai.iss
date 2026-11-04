@@ -21,6 +21,10 @@
 AppId={{8F2C1D4E-7A6B-4C3E-9D5F-2A1B6C8E0F31}
 AppName={#AppName}
 AppVersion={#AppVersion}
+; ARP 里的产品名必须固定成「25仔」，不能带版本号。
+; winget 的安装验证靠 DisplayName 精确匹配认产品，默认值（AppVerName）是
+; 「25仔 0.2.1」，对不上清单里的「25仔」就会报 Validation-Executable-Error。
+UninstallDisplayName={#AppName}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppUrl}
