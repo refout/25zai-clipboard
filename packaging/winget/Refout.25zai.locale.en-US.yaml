@@ -1,5 +1,5 @@
 PackageIdentifier: Refout.25zai
-PackageVersion: 0.1.3
+PackageVersion: 0.2.1
 PackageLocale: en-US
 Publisher: refout
 PublisherUrl: https://github.com/refout/25zai-clipboard
@@ -16,6 +16,6 @@ Tags:
   - clipboard-manager
   - productivity
   - privacy
-ReleaseNotesUrl: https://github.com/refout/25zai-clipboard/releases/tag/v0.1.3
+ReleaseNotesUrl: https://github.com/refout/25zai-clipboard/releases/tag/v0.2.1
 ManifestType: locale
 ManifestVersion: 1.6.0
